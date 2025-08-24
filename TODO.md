@@ -5,11 +5,12 @@
  - [ ] Fix notepad bugs
  - [x] More font sizes
  - [x] Fix text rendering non 100% opacity bg colors
+ - [ ] Rewrite and make a good file explorer
  - [ ] MAKE WINDOWS FOCUSABLE
  - [ ] FS
    - [ ] Explorer
      - [x] Display apps to open file
-     - [ ] Folders
+     - [x] Folders
      - [x] Fix UI rendering to don't redraw everything
    - [ ] Display fs info in sysinfo
    - [ ] Notepad

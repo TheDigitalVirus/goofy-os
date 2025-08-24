@@ -175,3 +175,80 @@ pub fn write_file_data(first_cluster: u32, data: &[u8]) -> Result<(), &'static s
 pub fn create_text_file_in_root(filename: &str, content: &str) -> Result<(), &'static str> {
     create_file_in_root(filename, content.as_bytes())
 }
+
+/// Create a new directory in the root directory
+pub fn create_directory_in_root(dirname: &str) -> Result<(), &'static str> {
+    interrupts::without_interrupts(|| {
+        let mut fs_guard = FILESYSTEM.lock();
+        match fs_guard.as_mut() {
+            Some(fs) => fs.create_directory_in_root(dirname),
+            None => Err("Filesystem not initialized"),
+        }
+    })
+}
+
+/// Create a new directory in a specific directory
+pub fn create_directory_in_directory(
+    parent_cluster: u32,
+    dirname: &str,
+) -> Result<(), &'static str> {
+    interrupts::without_interrupts(|| {
+        let mut fs_guard = FILESYSTEM.lock();
+        match fs_guard.as_mut() {
+            Some(fs) => fs.create_directory(parent_cluster, dirname),
+            None => Err("Filesystem not initialized"),
+        }
+    })
+}
+
+/// Delete a directory from the root directory
+pub fn delete_directory_from_root(dirname: &str) -> Result<(), &'static str> {
+    interrupts::without_interrupts(|| {
+        let mut fs_guard = FILESYSTEM.lock();
+        match fs_guard.as_mut() {
+            Some(fs) => fs.delete_directory_from_root(dirname),
+            None => Err("Filesystem not initialized"),
+        }
+    })
+}
+
+/// Delete a directory from a specific directory
+pub fn delete_directory_from_directory(
+    parent_cluster: u32,
+    dirname: &str,
+) -> Result<(), &'static str> {
+    interrupts::without_interrupts(|| {
+        let mut fs_guard = FILESYSTEM.lock();
+        match fs_guard.as_mut() {
+            Some(fs) => fs.delete_directory(parent_cluster, dirname),
+            None => Err("Filesystem not initialized"),
+        }
+    })
+}
+
+/// Navigate to a subdirectory and return its cluster number
+pub fn navigate_to_directory(current_cluster: u32, dirname: &str) -> Result<u32, &'static str> {
+    let mut fs_guard = FILESYSTEM.lock();
+    match fs_guard.as_mut() {
+        Some(fs) => fs.navigate_to_directory(current_cluster, dirname),
+        None => Err("Filesystem not initialized"),
+    }
+}
+
+/// Get the root cluster number
+pub fn get_root_cluster() -> Result<u32, &'static str> {
+    let fs_guard = FILESYSTEM.lock();
+    match fs_guard.as_ref() {
+        Some(fs) => Ok(fs.get_root_cluster()),
+        None => Err("Filesystem not initialized"),
+    }
+}
+
+/// Check if a cluster is the root directory
+pub fn is_root_directory(cluster: u32) -> Result<bool, &'static str> {
+    let fs_guard = FILESYSTEM.lock();
+    match fs_guard.as_ref() {
+        Some(fs) => Ok(fs.is_root_directory(cluster)),
+        None => Err("Filesystem not initialized"),
+    }
+}

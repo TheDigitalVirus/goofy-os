@@ -9,14 +9,19 @@ use crate::{
     framebuffer::Color,
     fs::{
         fat32::FileEntry,
-        manager::{create_file_in_root, delete_file_from_root, list_root_files},
+        manager::{
+            create_directory_in_directory, create_directory_in_root, create_file_in_directory,
+            create_file_in_root, delete_directory_from_directory, delete_directory_from_root,
+            delete_file_from_directory, delete_file_from_root, get_root_cluster, is_root_directory,
+            list_directory_files, list_root_files,
+        },
     },
     serial_println,
     surface::{Shape, Surface},
 };
 use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
 
-const FILE_LIST_HEIGHT: usize = 280;
+const FILE_LIST_HEIGHT: usize = 260;
 const FILE_ENTRY_HEIGHT: usize = 20;
 const BUTTON_HEIGHT: usize = 25;
 const MARGIN: usize = 10;
@@ -26,8 +31,16 @@ const TEXT_INPUT_HEIGHT: usize = 25;
 pub enum FileManagerMode {
     Browse,
     NewFile,
+    NewFolder,
     DeleteFile,
+    DeleteFolder,
     ViewFile(FileEntry),
+}
+
+#[derive(Clone, Debug)]
+pub struct DirectoryPath {
+    pub cluster: u32,
+    pub name: String,
 }
 
 pub struct FileManager {
@@ -40,21 +53,28 @@ pub struct FileManager {
     open_file_options: Option<Vec<(usize, String)>>, // Y offset, name
     selected_open_file_app: Option<String>,
 
+    // Directory navigation
+    current_directory: DirectoryPath,
+    directory_stack: Vec<DirectoryPath>,
+
     // UI element indices
     status_text_idx: Option<usize>,
     input_text_idx: Option<usize>,
+    breadcrumb_text_idx: Option<usize>,
 
     // Button indices
     new_file_btn_idx: Option<usize>,
+    new_folder_btn_idx: Option<usize>,
     delete_file_btn_idx: Option<usize>,
     view_file_btn_idx: Option<usize>,
     back_btn_idx: Option<usize>,
+    up_btn_idx: Option<usize>,
     create_btn_idx: Option<usize>,
     confirm_delete_btn_idx: Option<usize>,
     confirm_open_file_btn_idx: Option<usize>,
 
     // File list UI tracking for optimized updates
-    file_list_shapes: Vec<(usize, usize)>, // (background_idx, name_idx, size_idx) for each file entry
+    file_list_shapes: Vec<(usize, usize)>, // (background_idx, name_idx) for each file entry
     previous_selected_file: Option<usize>,
     ui_initialized: bool,
 }
@@ -71,13 +91,29 @@ impl FileManager {
             open_file_options: None,
             selected_open_file_app: None,
 
+            // Initialize at root directory
+            current_directory: match get_root_cluster() {
+                Ok(root) => DirectoryPath {
+                    cluster: root,
+                    name: "/".to_string(),
+                },
+                Err(_) => DirectoryPath {
+                    cluster: 0,
+                    name: "/".to_string(),
+                }, // Fallback, will be handled in refresh_file_list
+            },
+            directory_stack: Vec::new(),
+
             status_text_idx: None,
             input_text_idx: None,
+            breadcrumb_text_idx: None,
 
             new_file_btn_idx: None,
+            new_folder_btn_idx: None,
             delete_file_btn_idx: None,
             view_file_btn_idx: None,
             back_btn_idx: None,
+            up_btn_idx: None,
             create_btn_idx: None,
             confirm_delete_btn_idx: None,
             confirm_open_file_btn_idx: None,
@@ -114,15 +150,26 @@ impl FileManager {
     }
 
     fn refresh_file_list(&mut self) {
-        match list_root_files() {
+        let files_result = if is_root_directory(self.current_directory.cluster).unwrap_or(true) {
+            list_root_files()
+        } else {
+            list_directory_files(self.current_directory.cluster)
+        };
+
+        match files_result {
             Ok(files) => {
-                self.files = files.into_iter().filter(|f| !f.is_directory).collect();
-                self.status_message = format!("Found {} files", self.files.len());
-                serial_println!("File Manager: Found {} files", self.files.len());
+                // Include both files and directories
+                self.files = files
+                    .iter()
+                    .filter(|f: &&FileEntry| f.name != ".")
+                    .cloned()
+                    .collect();
+                self.status_message = format!("Found {} items", self.files.len());
+                serial_println!("File Manager: Found {} items", self.files.len());
             }
             Err(e) => {
                 self.status_message = format!("Error: {}", e);
-                serial_println!("File Manager: Error listing files: {}", e);
+                serial_println!("File Manager: Error listing directory: {}", e);
             }
         }
     }
@@ -133,7 +180,9 @@ impl FileManager {
         match &self.mode {
             FileManagerMode::Browse => self.setup_browse_ui(surface),
             FileManagerMode::NewFile => self.setup_new_file_ui(surface),
+            FileManagerMode::NewFolder => self.setup_new_folder_ui(surface),
             FileManagerMode::DeleteFile => self.setup_delete_file_ui(surface),
+            FileManagerMode::DeleteFolder => self.setup_delete_folder_ui(surface),
             FileManagerMode::ViewFile(_) => self.setup_view_file_ui(surface),
         }
 
@@ -193,12 +242,15 @@ impl FileManager {
 
         self.status_text_idx = None;
         self.input_text_idx = None;
+        self.breadcrumb_text_idx = None;
         self.open_file_options = None;
 
         self.new_file_btn_idx = None;
+        self.new_folder_btn_idx = None;
         self.delete_file_btn_idx = None;
         self.view_file_btn_idx = None;
         self.back_btn_idx = None;
+        self.up_btn_idx = None;
         self.create_btn_idx = None;
         self.confirm_delete_btn_idx = None;
         self.confirm_open_file_btn_idx = None;
@@ -212,31 +264,77 @@ impl FileManager {
         let width = surface.width;
         let height = surface.height;
 
-        // File list background
-        surface.add_shape(Shape::Rectangle {
+        // Breadcrumb navigation
+        let breadcrumb_text = self.get_breadcrumb_text();
+        self.breadcrumb_text_idx = Some(surface.add_shape(Shape::Text {
             x: MARGIN,
-            y: 40,
-            width: width - 2 * MARGIN,
-            height: FILE_LIST_HEIGHT,
-            color: Color::WHITE,
-            filled: true,
-            hide: false,
-        });
-
-        // File list border
-        surface.add_shape(Shape::Rectangle {
-            x: MARGIN,
-            y: 40,
-            width: width - 2 * MARGIN,
-            height: FILE_LIST_HEIGHT,
+            y: 10,
+            content: breadcrumb_text,
             color: Color::BLACK,
-            filled: false,
+            background_color: Color::new(240, 240, 240),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
             hide: false,
-        });
+        }));
 
-        // Display files
+        // Up button (if not in root)
+        if !is_root_directory(self.current_directory.cluster).unwrap_or(false) {
+            self.up_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+                x: width - 60,
+                y: 8,
+                width: 50,
+                height: 20,
+                color: Color::new(200, 200, 255),
+                filled: true,
+                hide: false,
+            }));
+
+            surface.add_shape(Shape::Rectangle {
+                x: width - 60,
+                y: 8,
+                width: 50,
+                height: 20,
+                color: Color::BLACK,
+                filled: false,
+                hide: false,
+            });
+
+            surface.add_shape(Shape::Text {
+                x: width - 55,
+                y: 10,
+                content: "Up".to_string(),
+                color: Color::BLACK,
+                background_color: Color::new(200, 200, 255),
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Regular,
+                hide: false,
+            });
+        }
+
+        // File list background
+        // surface.add_shape(Shape::Rectangle {
+        //     x: MARGIN,
+        //     y: 40,
+        //     width: width - 2 * MARGIN,
+        //     height: FILE_LIST_HEIGHT,
+        //     color: Color::WHITE,
+        //     filled: true,
+        //     hide: false,
+        // });
+
+        // // File list border
+        // surface.add_shape(Shape::Rectangle {
+        //     x: MARGIN,
+        //     y: 40,
+        //     width: width - 2 * MARGIN,
+        //     height: FILE_LIST_HEIGHT,
+        //     color: Color::BLACK,
+        //     filled: false,
+        //     hide: false,
+        // });
+
+        // Display files and folders
         let max_visible_files = FILE_LIST_HEIGHT / FILE_ENTRY_HEIGHT;
-        // let end_idx = (self.scroll_offset + max_visible_files).min(self.files.len());
 
         for (i, file) in self
             .files
@@ -263,11 +361,17 @@ impl FileManager {
                 hide: false,
             });
 
-            // File name
-            let display_name = if file.name.len() > 35 {
-                format!("{}...", &file.name[..32])
+            // File/folder icon and name
+            let display_name = if file.is_directory {
+                format!("/{}", file.name)
             } else {
                 file.name.clone()
+            };
+
+            let display_name = if display_name.len() > 35 {
+                format!("{}...", &display_name[..32])
+            } else {
+                display_name
             };
 
             let name_idx = surface.add_shape(Shape::Text {
@@ -281,25 +385,27 @@ impl FileManager {
                 hide: false,
             });
 
-            // File size
-            let size_text = if file.size < 1024 {
-                format!("{} B", file.size)
-            } else if file.size < 1024 * 1024 {
-                format!("{} KB", file.size / 1024)
-            } else {
-                format!("{} MB", file.size / (1024 * 1024))
-            };
+            // File size (only for files)
+            if !file.is_directory {
+                let size_text = if file.size < 1024 {
+                    format!("{} B", file.size)
+                } else if file.size < 1024 * 1024 {
+                    format!("{} KB", file.size / 1024)
+                } else {
+                    format!("{} MB", file.size / (1024 * 1024))
+                };
 
-            let _size_idx = surface.add_shape(Shape::Text {
-                x: width - 80,
-                y: y_pos + 3,
-                content: size_text,
-                color: Color::BLACK,
-                background_color: bg_color,
-                font_size: RasterHeight::Size16,
-                font_weight: FontWeight::Regular,
-                hide: false,
-            });
+                surface.add_shape(Shape::Text {
+                    x: width - 80,
+                    y: y_pos + 3,
+                    content: size_text,
+                    color: Color::BLACK,
+                    background_color: bg_color,
+                    font_size: RasterHeight::Size16,
+                    font_weight: FontWeight::Regular,
+                    hide: false,
+                });
+            }
 
             // Store shape indices for later updates
             self.file_list_shapes.push((bg_idx, name_idx));
@@ -312,7 +418,7 @@ impl FileManager {
         self.new_file_btn_idx = Some(surface.add_shape(Shape::Rectangle {
             x: MARGIN,
             y: button_y,
-            width: 80,
+            width: 65,
             height: BUTTON_HEIGHT,
             color: Color::new(220, 220, 220),
             filled: true,
@@ -322,7 +428,7 @@ impl FileManager {
         surface.add_shape(Shape::Rectangle {
             x: MARGIN,
             y: button_y,
-            width: 80,
+            width: 65,
             height: BUTTON_HEIGHT,
             color: Color::BLACK,
             filled: false,
@@ -330,9 +436,9 @@ impl FileManager {
         });
 
         surface.add_shape(Shape::Text {
-            x: MARGIN + 10,
+            x: MARGIN + 8,
             y: button_y + 5,
-            content: "New File".to_string(),
+            content: "File".to_string(),
             color: Color::BLACK,
             background_color: Color::new(220, 220, 220),
             font_size: RasterHeight::Size16,
@@ -340,21 +446,21 @@ impl FileManager {
             hide: false,
         });
 
-        // Delete File button
-        self.delete_file_btn_idx = Some(surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 90,
+        // New Folder button
+        self.new_folder_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+            x: MARGIN + 75,
             y: button_y,
-            width: 80,
+            width: 65,
             height: BUTTON_HEIGHT,
-            color: Color::new(255, 180, 180),
+            color: Color::new(180, 220, 255),
             filled: true,
             hide: false,
         }));
 
         surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 90,
+            x: MARGIN + 75,
             y: button_y,
-            width: 80,
+            width: 65,
             height: BUTTON_HEIGHT,
             color: Color::BLACK,
             filled: false,
@@ -362,7 +468,39 @@ impl FileManager {
         });
 
         surface.add_shape(Shape::Text {
-            x: MARGIN + 100,
+            x: MARGIN + 82,
+            y: button_y + 5,
+            content: "Folder".to_string(),
+            color: Color::BLACK,
+            background_color: Color::new(180, 220, 255),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        });
+
+        // Delete button
+        self.delete_file_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+            x: MARGIN + 150,
+            y: button_y,
+            width: 65,
+            height: BUTTON_HEIGHT,
+            color: Color::new(255, 180, 180),
+            filled: true,
+            hide: false,
+        }));
+
+        surface.add_shape(Shape::Rectangle {
+            x: MARGIN + 150,
+            y: button_y,
+            width: 65,
+            height: BUTTON_HEIGHT,
+            color: Color::BLACK,
+            filled: false,
+            hide: false,
+        });
+
+        surface.add_shape(Shape::Text {
+            x: MARGIN + 165,
             y: button_y + 5,
             content: "Delete".to_string(),
             color: Color::BLACK,
@@ -372,11 +510,11 @@ impl FileManager {
             hide: false,
         });
 
-        // View File button
+        // Open button
         self.view_file_btn_idx = Some(surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 180,
+            x: MARGIN + 225,
             y: button_y,
-            width: 80,
+            width: 65,
             height: BUTTON_HEIGHT,
             color: Color::new(180, 255, 180),
             filled: true,
@@ -384,9 +522,9 @@ impl FileManager {
         }));
 
         surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 180,
+            x: MARGIN + 225,
             y: button_y,
-            width: 80,
+            width: 65,
             height: BUTTON_HEIGHT,
             color: Color::BLACK,
             filled: false,
@@ -394,7 +532,7 @@ impl FileManager {
         });
 
         surface.add_shape(Shape::Text {
-            x: MARGIN + 200,
+            x: MARGIN + 245,
             y: button_y + 5,
             content: "Open".to_string(),
             color: Color::BLACK,
@@ -415,6 +553,324 @@ impl FileManager {
             font_weight: FontWeight::Regular,
             hide: false,
         }));
+    }
+
+    fn setup_new_folder_ui(&mut self, surface: &mut Surface) {
+        let width = surface.width;
+        let height = surface.height;
+
+        // Title
+        surface.add_shape(Shape::Text {
+            x: MARGIN,
+            y: 50,
+            content: "Create New Folder".to_string(),
+            color: Color::BLACK,
+            background_color: Color::new(240, 240, 240),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Bold,
+            hide: false,
+        });
+
+        // Folder name input label
+        surface.add_shape(Shape::Text {
+            x: MARGIN,
+            y: 80,
+            content: "Folder name:".to_string(),
+            color: Color::BLACK,
+            background_color: Color::new(240, 240, 240),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        });
+
+        // Folder name input background
+        surface.add_shape(Shape::Rectangle {
+            x: MARGIN,
+            y: 100,
+            width: width - 2 * MARGIN,
+            height: TEXT_INPUT_HEIGHT,
+            color: Color::WHITE,
+            filled: true,
+            hide: false,
+        });
+
+        surface.add_shape(Shape::Rectangle {
+            x: MARGIN,
+            y: 100,
+            width: width - 2 * MARGIN,
+            height: TEXT_INPUT_HEIGHT,
+            color: Color::BLACK,
+            filled: false,
+            hide: false,
+        });
+
+        // Folder name input text
+        self.input_text_idx = Some(surface.add_shape(Shape::Text {
+            x: MARGIN + 5,
+            y: 105,
+            content: format!("{}_", self.input_text),
+            color: Color::BLACK,
+            background_color: Color::WHITE,
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        }));
+
+        // Buttons
+        let button_y = height - 60;
+
+        // Create button
+        self.create_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+            x: MARGIN,
+            y: button_y,
+            width: 80,
+            height: BUTTON_HEIGHT,
+            color: Color::new(180, 255, 180),
+            filled: true,
+            hide: false,
+        }));
+
+        surface.add_shape(Shape::Rectangle {
+            x: MARGIN,
+            y: button_y,
+            width: 80,
+            height: BUTTON_HEIGHT,
+            color: Color::BLACK,
+            filled: false,
+            hide: false,
+        });
+
+        surface.add_shape(Shape::Text {
+            x: MARGIN + 20,
+            y: button_y + 5,
+            content: "Create".to_string(),
+            color: Color::BLACK,
+            background_color: Color::new(180, 255, 180),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        });
+
+        // Back button
+        self.back_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+            x: MARGIN + 90,
+            y: button_y,
+            width: 80,
+            height: BUTTON_HEIGHT,
+            color: Color::new(220, 220, 220),
+            filled: true,
+            hide: false,
+        }));
+
+        surface.add_shape(Shape::Rectangle {
+            x: MARGIN + 90,
+            y: button_y,
+            width: 80,
+            height: BUTTON_HEIGHT,
+            color: Color::BLACK,
+            filled: false,
+            hide: false,
+        });
+
+        surface.add_shape(Shape::Text {
+            x: MARGIN + 120,
+            y: button_y + 5,
+            content: "Cancel".to_string(),
+            color: Color::BLACK,
+            background_color: Color::new(220, 220, 220),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        });
+
+        // Status bar
+        self.status_text_idx = Some(surface.add_shape(Shape::Text {
+            x: MARGIN,
+            y: height - 25,
+            content: self.status_message.clone(),
+            color: Color::BLACK,
+            background_color: Color::new(240, 240, 240),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        }));
+    }
+
+    fn setup_delete_folder_ui(&mut self, surface: &mut Surface) {
+        let height = surface.height;
+
+        let selected_name = if let Some(index) = self.selected_file_index {
+            if index < self.files.len() {
+                self.files[index].name.clone()
+            } else {
+                "Unknown".to_string()
+            }
+        } else {
+            "None".to_string()
+        };
+
+        // Title
+        surface.add_shape(Shape::Text {
+            x: MARGIN,
+            y: 50,
+            content: "Delete Folder".to_string(),
+            color: Color::BLACK,
+            background_color: Color::new(240, 240, 240),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Bold,
+            hide: false,
+        });
+
+        // Confirmation message
+        surface.add_shape(Shape::Text {
+            x: MARGIN,
+            y: 80,
+            content: format!(
+                "Are you sure you want to delete folder '{}'?",
+                selected_name
+            ),
+            color: Color::BLACK,
+            background_color: Color::new(240, 240, 240),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        });
+
+        surface.add_shape(Shape::Text {
+            x: MARGIN,
+            y: 100,
+            content: "Warning: This will only work if the folder is empty!".to_string(),
+            color: Color::new(200, 0, 0),
+            background_color: Color::new(240, 240, 240),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        });
+
+        // Buttons
+        let button_y = height - 60;
+
+        // Confirm Delete button
+        self.confirm_delete_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+            x: MARGIN,
+            y: button_y,
+            width: 100,
+            height: BUTTON_HEIGHT,
+            color: Color::new(255, 180, 180),
+            filled: true,
+            hide: false,
+        }));
+
+        surface.add_shape(Shape::Rectangle {
+            x: MARGIN,
+            y: button_y,
+            width: 100,
+            height: BUTTON_HEIGHT,
+            color: Color::BLACK,
+            filled: false,
+            hide: false,
+        });
+
+        surface.add_shape(Shape::Text {
+            x: MARGIN + 10,
+            y: button_y + 5,
+            content: "Delete Folder".to_string(),
+            color: Color::BLACK,
+            background_color: Color::new(255, 180, 180),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        });
+
+        // Cancel button
+        self.back_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+            x: MARGIN + 110,
+            y: button_y,
+            width: 80,
+            height: BUTTON_HEIGHT,
+            color: Color::new(220, 220, 220),
+            filled: true,
+            hide: false,
+        }));
+
+        surface.add_shape(Shape::Rectangle {
+            x: MARGIN + 110,
+            y: button_y,
+            width: 80,
+            height: BUTTON_HEIGHT,
+            color: Color::BLACK,
+            filled: false,
+            hide: false,
+        });
+
+        surface.add_shape(Shape::Text {
+            x: MARGIN + 135,
+            y: button_y + 5,
+            content: "Cancel".to_string(),
+            color: Color::BLACK,
+            background_color: Color::new(220, 220, 220),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        });
+
+        // Status bar
+        self.status_text_idx = Some(surface.add_shape(Shape::Text {
+            x: MARGIN,
+            y: height - 25,
+            content: self.status_message.clone(),
+            color: Color::BLACK,
+            background_color: Color::new(240, 240, 240),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        }));
+    }
+
+    // Navigation methods
+    pub fn navigate_up(&mut self) -> Result<(), &'static str> {
+        if let Some(parent_dir) = self.directory_stack.pop() {
+            self.current_directory = parent_dir.clone();
+            self.refresh_file_list();
+            self.selected_file_index = None;
+            Ok(())
+        } else if !is_root_directory(self.current_directory.cluster).unwrap_or(false) {
+            // Navigate to root if we're not already there
+            self.current_directory = DirectoryPath {
+                cluster: get_root_cluster()?,
+                name: "/".to_string(),
+            };
+            self.refresh_file_list();
+            self.selected_file_index = None;
+            Ok(())
+        } else {
+            Err("Already at root directory")
+        }
+    }
+
+    pub fn navigate_into_directory(&mut self, dir_name: &str) -> Result<(), &'static str> {
+        serial_println!("Navigating into directory: {}", dir_name);
+
+        // Find the directory in current directory
+        let dir_entry = self
+            .files
+            .iter()
+            .find(|f| f.is_directory && f.name == dir_name);
+
+        if let Some(dir) = dir_entry {
+            self.directory_stack.push(self.current_directory.clone());
+
+            // Navigate to the directory
+            self.current_directory = DirectoryPath {
+                cluster: dir.first_cluster,
+                name: dir.name.clone(),
+            };
+            self.refresh_file_list();
+            self.selected_file_index = None;
+            Ok(())
+        } else {
+            Err("Directory not found or not a directory")
+        }
     }
 
     fn setup_new_file_ui(&mut self, surface: &mut Surface) {
@@ -852,7 +1308,9 @@ impl FileManager {
         match &self.mode {
             FileManagerMode::Browse => (self.handle_browse_click(x, y, surface), None),
             FileManagerMode::NewFile => (self.handle_new_file_click(x, y, surface), None),
+            FileManagerMode::NewFolder => (self.handle_new_folder_click(x, y, surface), None),
             FileManagerMode::DeleteFile => (self.handle_delete_click(x, y, surface), None),
+            FileManagerMode::DeleteFolder => (self.handle_delete_folder_click(x, y, surface), None),
             FileManagerMode::ViewFile(_) => self.handle_view_click(x, y, surface),
         }
     }
@@ -869,9 +1327,21 @@ impl FileManager {
             }
         }
 
+        // Check up button click
+        if self.up_btn_idx.is_some() {
+            if self.is_button_clicked(x, y, surface.width - 60, 8, 50, 20) {
+                if let Ok(_) = self.navigate_up() {
+                    self.setup_ui(surface);
+                } else {
+                    self.update_status_message(surface, "Already at root directory".to_string());
+                }
+                return true;
+            }
+        }
+
         // Check button clicks
         if self.new_file_btn_idx.is_some() {
-            if self.is_button_clicked(x, y, MARGIN, surface.height - 60, 80, BUTTON_HEIGHT) {
+            if self.is_button_clicked(x, y, MARGIN, surface.height - 60, 65, BUTTON_HEIGHT) {
                 self.mode = FileManagerMode::NewFile;
                 self.input_text.clear();
                 self.setup_ui(surface);
@@ -879,16 +1349,31 @@ impl FileManager {
             }
         }
 
+        if self.new_folder_btn_idx.is_some() {
+            if self.is_button_clicked(x, y, MARGIN + 75, surface.height - 60, 65, BUTTON_HEIGHT) {
+                self.mode = FileManagerMode::NewFolder;
+                self.input_text.clear();
+                self.setup_ui(surface);
+                return true;
+            }
+        }
+
         if self.delete_file_btn_idx.is_some() {
-            if self.is_button_clicked(x, y, MARGIN + 90, surface.height - 60, 80, BUTTON_HEIGHT) {
-                if self.selected_file_index.is_some() {
-                    self.mode = FileManagerMode::DeleteFile;
-                    self.setup_ui(surface);
+            if self.is_button_clicked(x, y, MARGIN + 150, surface.height - 60, 65, BUTTON_HEIGHT) {
+                if let Some(idx) = self.selected_file_index {
+                    if let Some(file) = self.files.get(idx) {
+                        if file.is_directory {
+                            self.mode = FileManagerMode::DeleteFolder;
+                        } else {
+                            self.mode = FileManagerMode::DeleteFile;
+                        }
+                        self.setup_ui(surface);
+                    }
                 } else {
                     // Use optimized status update instead of full UI rebuild
                     self.update_status_message(
                         surface,
-                        "Please select a file to delete".to_string(),
+                        "Please select a file or folder to delete".to_string(),
                     );
                 }
                 return true;
@@ -896,21 +1381,41 @@ impl FileManager {
         }
 
         if self.view_file_btn_idx.is_some() {
-            if self.is_button_clicked(x, y, MARGIN + 180, surface.height - 60, 80, BUTTON_HEIGHT) {
-                if let Some(idx) = self.selected_file_index {
-                    if let Some(file) = self.files.get(idx).cloned() {
-                        self.mode = FileManagerMode::ViewFile(file);
-                        self.setup_ui(surface);
-                    }
-                } else {
-                    // Use optimized status update instead of full UI rebuild
-                    self.update_status_message(surface, "Please select a file to view".to_string());
-                }
-                return true;
+            if self.is_button_clicked(x, y, MARGIN + 225, surface.height - 60, 65, BUTTON_HEIGHT) {
+                return self.handle_view_file(surface);
             }
         }
 
         false
+    }
+
+    fn handle_view_file(&mut self, surface: &mut Surface) -> bool {
+        if let Some(idx) = self.selected_file_index {
+            if let Some(file) = self.files.get(idx).cloned() {
+                if file.is_directory {
+                    // Navigate into directory
+                    if let Ok(_) = self.navigate_into_directory(&file.name) {
+                        self.setup_ui(surface);
+                    } else {
+                        self.update_status_message(
+                            surface,
+                            "Failed to enter directory".to_string(),
+                        );
+                    }
+                } else {
+                    // Open file
+                    self.mode = FileManagerMode::ViewFile(file);
+                    self.setup_ui(surface);
+                }
+            }
+        } else {
+            // Use optimized status update instead of full UI rebuild
+            self.update_status_message(
+                surface,
+                "Please select a file or folder to open".to_string(),
+            );
+        }
+        return true;
     }
 
     fn handle_new_file_click(&mut self, x: usize, y: usize, surface: &mut Surface) -> bool {
@@ -930,6 +1435,111 @@ impl FileManager {
         }
 
         false
+    }
+
+    fn handle_new_folder_click(&mut self, x: usize, y: usize, surface: &mut Surface) -> bool {
+        if self.create_btn_idx.is_some() {
+            if self.is_button_clicked(x, y, MARGIN, surface.height - 60, 80, BUTTON_HEIGHT) {
+                self.create_folder(surface);
+                return true;
+            }
+        }
+
+        if self.back_btn_idx.is_some() {
+            if self.is_button_clicked(x, y, MARGIN + 90, surface.height - 60, 80, BUTTON_HEIGHT) {
+                self.mode = FileManagerMode::Browse;
+                self.setup_ui(surface);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn handle_delete_folder_click(&mut self, x: usize, y: usize, surface: &mut Surface) -> bool {
+        if self.confirm_delete_btn_idx.is_some() {
+            if self.is_button_clicked(x, y, MARGIN, surface.height - 60, 100, BUTTON_HEIGHT) {
+                self.delete_selected_folder(surface);
+                return true;
+            }
+        }
+
+        if self.back_btn_idx.is_some() {
+            if self.is_button_clicked(x, y, MARGIN + 110, surface.height - 60, 80, BUTTON_HEIGHT) {
+                self.mode = FileManagerMode::Browse;
+                self.setup_ui(surface);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn create_folder(&mut self, surface: &mut Surface) {
+        if self.input_text.trim().is_empty() {
+            self.update_status_message(surface, "Please enter a folder name".to_string());
+            return;
+        }
+
+        let create_result = if is_root_directory(self.current_directory.cluster).unwrap_or(true) {
+            create_directory_in_root(&self.input_text)
+        } else {
+            create_directory_in_directory(self.current_directory.cluster, &self.input_text)
+        };
+
+        match create_result {
+            Ok(_) => {
+                self.refresh_file_list();
+                self.mode = FileManagerMode::Browse;
+                self.input_text.clear();
+                self.setup_ui(surface);
+                self.update_status_message(surface, "Folder created successfully".to_string());
+            }
+            Err(e) => {
+                self.update_status_message(surface, format!("Error creating folder: {}", e));
+            }
+        }
+    }
+
+    fn delete_selected_folder(&mut self, surface: &mut Surface) {
+        if let Some(index) = self.selected_file_index {
+            if let Some(folder) = self.files.get(index) {
+                if !folder.is_directory {
+                    self.update_status_message(
+                        surface,
+                        "Selected item is not a folder".to_string(),
+                    );
+                    return;
+                }
+
+                let delete_result = if is_root_directory(self.current_directory.cluster)
+                    .unwrap_or(true)
+                {
+                    delete_directory_from_root(&folder.name)
+                } else {
+                    delete_directory_from_directory(self.current_directory.cluster, &folder.name)
+                };
+
+                match delete_result {
+                    Ok(_) => {
+                        self.refresh_file_list();
+                        self.selected_file_index = None;
+                        self.mode = FileManagerMode::Browse;
+                        self.setup_ui(surface);
+                        self.update_status_message(
+                            surface,
+                            "Folder deleted successfully".to_string(),
+                        );
+                    }
+                    Err(e) => {
+                        self.update_status_message(
+                            surface,
+                            format!("Error deleting folder: {}", e),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn handle_delete_click(&mut self, x: usize, y: usize, surface: &mut Surface) -> bool {
@@ -1023,11 +1633,18 @@ impl FileManager {
             return;
         }
 
-        match create_file_in_root(&self.input_text, &[]) {
+        let create_result = if is_root_directory(self.current_directory.cluster).unwrap_or(true) {
+            create_file_in_root(&self.input_text, &[])
+        } else {
+            create_file_in_directory(self.current_directory.cluster, &self.input_text, &[])
+        };
+
+        match create_result {
             Ok(_) => {
                 self.status_message = format!("File '{}' created successfully", self.input_text);
                 self.refresh_file_list();
                 self.mode = FileManagerMode::Browse;
+                self.input_text.clear();
                 self.setup_ui(surface);
             }
             Err(e) => {
@@ -1040,8 +1657,23 @@ impl FileManager {
     fn delete_selected_file(&mut self, surface: &mut Surface) {
         if let Some(idx) = self.selected_file_index {
             if let Some(file) = self.files.get(idx) {
+                if file.is_directory {
+                    self.update_status_message(
+                        surface,
+                        "Use Delete Folder for directories".to_string(),
+                    );
+                    return;
+                }
+
                 let filename = file.name.clone();
-                match delete_file_from_root(&filename) {
+                let delete_result =
+                    if is_root_directory(self.current_directory.cluster).unwrap_or(true) {
+                        delete_file_from_root(&filename)
+                    } else {
+                        delete_file_from_directory(self.current_directory.cluster, &filename)
+                    };
+
+                match delete_result {
                     Ok(_) => {
                         self.status_message = format!("File '{}' deleted successfully", filename);
                         self.refresh_file_list();
@@ -1061,6 +1693,11 @@ impl FileManager {
 
     pub fn handle_char_input(&mut self, c: char, surface: &mut Surface) {
         match &self.mode {
+            FileManagerMode::Browse => {
+                if c == '\n' {
+                    self.handle_view_file(surface);
+                }
+            }
             FileManagerMode::NewFile => {
                 if c == '\x08' {
                     // Backspace
@@ -1076,18 +1713,38 @@ impl FileManager {
                 // Use optimized text update instead of full UI rebuild
                 self.update_input_text(surface);
             }
+            FileManagerMode::NewFolder => {
+                if c == '\x08' {
+                    // Backspace
+                    self.input_text.pop();
+                } else if c == '\n' {
+                    // Enter key, create folder
+                    self.create_folder(surface);
+                    return; // create_folder handles its own UI updates
+                } else if c.is_ascii() && !c.is_control() {
+                    self.input_text.push(c);
+                }
+
+                // Use optimized text update instead of full UI rebuild
+                self.update_input_text(surface);
+            }
             _ => {}
         }
     }
 
     pub fn handle_key_input(&mut self, key: KeyCode, surface: &mut Surface) {
         match &self.mode {
-            FileManagerMode::NewFile => match key {
+            FileManagerMode::NewFile | FileManagerMode::NewFolder => match key {
                 KeyCode::Backspace => {
                     self.input_text.pop();
                     // Use optimized text update instead of full UI rebuild
                     self.update_input_text(surface);
                 }
+                KeyCode::Return => match &self.mode {
+                    FileManagerMode::NewFile => self.create_file(surface),
+                    FileManagerMode::NewFolder => self.create_folder(surface),
+                    _ => {}
+                },
                 _ => {}
             },
             FileManagerMode::Browse => match key {
@@ -1120,14 +1777,38 @@ impl FileManager {
                 KeyCode::Return => {
                     if let Some(idx) = self.selected_file_index {
                         if let Some(file) = self.files.get(idx).cloned() {
-                            self.mode = FileManagerMode::ViewFile(file);
-                            self.setup_ui(surface);
+                            if file.is_directory {
+                                // Navigate into directory
+                                if let Ok(_) = self.navigate_into_directory(&file.name) {
+                                    self.setup_ui(surface);
+                                }
+                            } else {
+                                // Open file
+                                self.mode = FileManagerMode::ViewFile(file);
+                                self.setup_ui(surface);
+                            }
                         }
                     }
                 }
                 _ => {}
             },
             _ => {}
+        }
+    }
+
+    fn get_breadcrumb_text(&self) -> String {
+        if is_root_directory(self.current_directory.cluster).unwrap_or(true) {
+            "/ (Root)".to_string()
+        } else if self.directory_stack.is_empty() {
+            "/ > ?".to_string()
+        } else {
+            serial_println!("Directory stack: {:?}", self.directory_stack);
+            let mut path = String::new();
+            for dir in &self.directory_stack {
+                path.push_str(&format!("{} >  ", dir.name));
+            }
+            path.push_str(self.current_directory.name.as_str());
+            path
         }
     }
 

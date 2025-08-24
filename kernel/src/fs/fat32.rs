@@ -768,4 +768,212 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
     pub fn delete_file_from_root(&mut self, filename: &str) -> Result<(), &'static str> {
         self.delete_file(self.boot_sector.root_cluster, filename)
     }
+
+    /// Create a new directory
+    pub fn create_directory(
+        &mut self,
+        parent_cluster: u32,
+        dirname: &str,
+    ) -> Result<(), &'static str> {
+        // Check if directory already exists
+        if self
+            .find_file_in_directory(parent_cluster, dirname)?
+            .is_some()
+        {
+            return Err("Directory already exists");
+        }
+
+        // Allocate a cluster for the new directory
+        let dir_cluster = self.allocate_cluster_chain(1)?;
+
+        // Initialize the directory cluster with "." and ".." entries
+        self.initialize_directory_cluster(dir_cluster, parent_cluster)?;
+
+        // Create directory entry in parent directory
+        self.create_directory_entry(parent_cluster, dirname, dir_cluster, 0, true)?;
+
+        Ok(())
+    }
+
+    /// Initialize a directory cluster with "." and ".." entries
+    fn initialize_directory_cluster(
+        &mut self,
+        dir_cluster: u32,
+        parent_cluster: u32,
+    ) -> Result<(), &'static str> {
+        let cluster_size = (self.sectors_per_cluster * self.bytes_per_sector) as usize;
+        let mut cluster_buffer = vec![0u8; cluster_size];
+
+        // Create "." entry (current directory)
+        let dot_entry = DirectoryEntry {
+            name: [
+                b'.', b' ', b' ', b' ', b' ', b' ', b' ', b' ', b' ', b' ', b' ',
+            ],
+            attributes: attributes::DIRECTORY,
+            reserved: 0,
+            creation_time_tenths: 0,
+            creation_time: 0,
+            creation_date: 0,
+            last_access_date: 0,
+            first_cluster_high: (dir_cluster >> 16) as u16,
+            last_write_time: 0,
+            last_write_date: 0,
+            first_cluster_low: (dir_cluster & 0xFFFF) as u16,
+            file_size: 0,
+        };
+
+        // Create ".." entry (parent directory)
+        let dotdot_entry = DirectoryEntry {
+            name: [
+                b'.', b'.', b' ', b' ', b' ', b' ', b' ', b' ', b' ', b' ', b' ',
+            ],
+            attributes: attributes::DIRECTORY,
+            reserved: 0,
+            creation_time_tenths: 0,
+            creation_time: 0,
+            creation_date: 0,
+            last_access_date: 0,
+            first_cluster_high: (parent_cluster >> 16) as u16,
+            last_write_time: 0,
+            last_write_date: 0,
+            first_cluster_low: (parent_cluster & 0xFFFF) as u16,
+            file_size: 0,
+        };
+
+        // Copy entries to buffer
+        let dot_bytes = unsafe {
+            core::slice::from_raw_parts(
+                &dot_entry as *const DirectoryEntry as *const u8,
+                mem::size_of::<DirectoryEntry>(),
+            )
+        };
+        cluster_buffer[..mem::size_of::<DirectoryEntry>()].copy_from_slice(dot_bytes);
+
+        let dotdot_bytes = unsafe {
+            core::slice::from_raw_parts(
+                &dotdot_entry as *const DirectoryEntry as *const u8,
+                mem::size_of::<DirectoryEntry>(),
+            )
+        };
+        cluster_buffer[mem::size_of::<DirectoryEntry>()..2 * mem::size_of::<DirectoryEntry>()]
+            .copy_from_slice(dotdot_bytes);
+
+        // Write the initialized cluster
+        self.write_cluster(dir_cluster, &cluster_buffer)?;
+
+        Ok(())
+    }
+
+    /// Create a new directory in the root directory
+    pub fn create_directory_in_root(&mut self, dirname: &str) -> Result<(), &'static str> {
+        self.create_directory(self.boot_sector.root_cluster, dirname)
+    }
+
+    /// Delete a directory (must be empty)
+    pub fn delete_directory(
+        &mut self,
+        parent_cluster: u32,
+        dirname: &str,
+    ) -> Result<(), &'static str> {
+        // Find the directory
+        let dir_entry = match self.find_file_in_directory(parent_cluster, dirname)? {
+            Some(entry) => entry,
+            None => return Err("Directory not found"),
+        };
+
+        if !dir_entry.is_directory {
+            return Err("Not a directory");
+        }
+
+        // Check if directory is empty (only "." and ".." entries should exist)
+        if !self.is_directory_empty(dir_entry.first_cluster)? {
+            return Err("Directory not empty");
+        }
+
+        // Free the cluster(s) used by the directory
+        self.free_cluster_chain(dir_entry.first_cluster)?;
+
+        // Mark directory entry as deleted in parent
+        self.mark_directory_entry_deleted(parent_cluster, dirname)?;
+
+        Ok(())
+    }
+
+    /// Check if a directory is empty (contains only "." and ".." entries)
+    fn is_directory_empty(&mut self, dir_cluster: u32) -> Result<bool, &'static str> {
+        let entries = self.read_directory_entries(dir_cluster)?;
+
+        for entry in entries {
+            // Skip volume labels and long name entries
+            if (entry.attributes & attributes::VOLUME_ID) != 0
+                || entry.attributes == attributes::LONG_NAME
+            {
+                continue;
+            }
+
+            // Check if this is "." or ".." entry
+            let is_dot = entry.name[0] == b'.' && entry.name[1] == b' ';
+            let is_dotdot = entry.name[0] == b'.' && entry.name[1] == b'.' && entry.name[2] == b' ';
+
+            if !is_dot && !is_dotdot {
+                return Ok(false); // Found a non-dot entry, directory is not empty
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Delete a directory from the root directory
+    pub fn delete_directory_from_root(&mut self, dirname: &str) -> Result<(), &'static str> {
+        self.delete_directory(self.boot_sector.root_cluster, dirname)
+    }
+
+    /// Navigate to a subdirectory and return its cluster number
+    pub fn navigate_to_directory(
+        &mut self,
+        current_cluster: u32,
+        dirname: &str,
+    ) -> Result<u32, &'static str> {
+        // Handle special cases
+        if dirname == "." {
+            return Ok(current_cluster);
+        }
+
+        if dirname == ".." {
+            // Find the parent directory by reading the ".." entry
+            let entries = self.read_directory_entries(current_cluster)?;
+            for entry in entries {
+                let is_dotdot =
+                    entry.name[0] == b'.' && entry.name[1] == b'.' && entry.name[2] == b' ';
+                if is_dotdot {
+                    let parent_cluster = ((entry.first_cluster_high as u32) << 16)
+                        | (entry.first_cluster_low as u32);
+                    return Ok(parent_cluster);
+                }
+            }
+            return Err("Parent directory not found");
+        }
+
+        // Find the directory entry
+        let dir_entry = match self.find_file_in_directory(current_cluster, dirname)? {
+            Some(entry) => entry,
+            None => return Err("Directory not found"),
+        };
+
+        if !dir_entry.is_directory {
+            return Err("Not a directory");
+        }
+
+        Ok(dir_entry.first_cluster)
+    }
+
+    /// Get the root cluster number
+    pub fn get_root_cluster(&self) -> u32 {
+        self.boot_sector.root_cluster
+    }
+
+    /// Check if a cluster is the root directory
+    pub fn is_root_directory(&self, cluster: u32) -> bool {
+        cluster == self.boot_sector.root_cluster
+    }
 }

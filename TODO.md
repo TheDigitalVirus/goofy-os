@@ -10,7 +10,7 @@
    - [ ] Explorer
      - [x] Display apps to open file
      - [ ] Folders
-     - [ ] Fix UI rendering to don't redraw everything
+     - [x] Fix UI rendering to don't redraw everything
    - [ ] Display fs info in sysinfo
    - [ ] Notepad
      - [ ] Save to fs

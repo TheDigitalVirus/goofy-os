@@ -22,7 +22,7 @@ const BUTTON_HEIGHT: usize = 25;
 const MARGIN: usize = 10;
 const TEXT_INPUT_HEIGHT: usize = 25;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum FileManagerMode {
     Browse,
     NewFile,
@@ -52,6 +52,11 @@ pub struct FileManager {
     create_btn_idx: Option<usize>,
     confirm_delete_btn_idx: Option<usize>,
     confirm_open_file_btn_idx: Option<usize>,
+
+    // File list UI tracking for optimized updates
+    file_list_shapes: Vec<(usize, usize)>, // (background_idx, name_idx, size_idx) for each file entry
+    previous_selected_file: Option<usize>,
+    ui_initialized: bool,
 }
 
 impl FileManager {
@@ -76,6 +81,10 @@ impl FileManager {
             create_btn_idx: None,
             confirm_delete_btn_idx: None,
             confirm_open_file_btn_idx: None,
+
+            file_list_shapes: Vec::new(),
+            previous_selected_file: None,
+            ui_initialized: false,
         };
 
         fm.refresh_file_list();
@@ -127,8 +136,58 @@ impl FileManager {
             FileManagerMode::DeleteFile => self.setup_delete_file_ui(surface),
             FileManagerMode::ViewFile(_) => self.setup_view_file_ui(surface),
         }
+
+        self.ui_initialized = true;
     }
 
+    /// Update only the text input without rebuilding the entire UI
+    pub fn update_input_text(&mut self, surface: &mut Surface) {
+        if let Some(idx) = self.input_text_idx {
+            surface.update_text_content(idx, format!("{}_", self.input_text), None);
+        }
+    }
+
+    /// Update only the status message without rebuilding the entire UI
+    pub fn update_status_message(&mut self, surface: &mut Surface, message: String) {
+        self.status_message = message;
+        if let Some(idx) = self.status_text_idx {
+            surface.update_text_content(idx, self.status_message.clone(), None);
+        }
+    }
+
+    /// Update app selection highlighting in view mode without rebuilding the entire UI
+    pub fn update_app_selection(&mut self, surface: &mut Surface, selected_app: &str) {
+        self.selected_open_file_app = Some(selected_app.to_string());
+
+        // In a real implementation, we would update the highlighting of the selected app here
+        // For now, we could add a visual indicator by updating the status message
+        self.update_status_message(surface, format!("Selected: {}", selected_app));
+    }
+
+    /// Update file selection highlighting without rebuilding the entire UI
+    pub fn update_file_selection(&mut self, surface: &mut Surface) {
+        if !self.ui_initialized || self.mode != FileManagerMode::Browse {
+            return;
+        }
+
+        // Update previous selection (if any) to normal color
+        if let Some(prev_idx) = self.previous_selected_file {
+            if prev_idx < self.file_list_shapes.len() {
+                let (bg_idx, _) = self.file_list_shapes[prev_idx];
+                surface.update_rectangle_color(bg_idx, Color::WHITE);
+            }
+        }
+
+        // Update new selection (if any) to highlight color
+        if let Some(curr_idx) = self.selected_file_index {
+            if curr_idx < self.file_list_shapes.len() {
+                let (bg_idx, _) = self.file_list_shapes[curr_idx];
+                surface.update_rectangle_color(bg_idx, Color::new(150, 200, 255));
+            }
+        }
+
+        self.previous_selected_file = self.selected_file_index;
+    }
     fn clear_ui(&mut self, surface: &mut Surface) {
         surface.clear_all_shapes();
 
@@ -143,6 +202,10 @@ impl FileManager {
         self.create_btn_idx = None;
         self.confirm_delete_btn_idx = None;
         self.confirm_open_file_btn_idx = None;
+
+        self.file_list_shapes.clear();
+        self.previous_selected_file = None;
+        self.ui_initialized = false;
     }
 
     fn setup_browse_ui(&mut self, surface: &mut Surface) {
@@ -190,7 +253,7 @@ impl FileManager {
             };
 
             // File entry background
-            surface.add_shape(Shape::Rectangle {
+            let bg_idx = surface.add_shape(Shape::Rectangle {
                 x: MARGIN + 2,
                 y: y_pos,
                 width: width - 2 * MARGIN - 4,
@@ -207,7 +270,7 @@ impl FileManager {
                 file.name.clone()
             };
 
-            surface.add_shape(Shape::Text {
+            let name_idx = surface.add_shape(Shape::Text {
                 x: MARGIN + 5,
                 y: y_pos + 3,
                 content: display_name,
@@ -227,7 +290,7 @@ impl FileManager {
                 format!("{} MB", file.size / (1024 * 1024))
             };
 
-            surface.add_shape(Shape::Text {
+            let _size_idx = surface.add_shape(Shape::Text {
                 x: width - 80,
                 y: y_pos + 3,
                 content: size_text,
@@ -237,6 +300,9 @@ impl FileManager {
                 font_weight: FontWeight::Regular,
                 hide: false,
             });
+
+            // Store shape indices for later updates
+            self.file_list_shapes.push((bg_idx, name_idx));
         }
 
         // Buttons
@@ -797,7 +863,8 @@ impl FileManager {
             let clicked_index = self.scroll_offset + (y - 45) / FILE_ENTRY_HEIGHT;
             if clicked_index < self.files.len() {
                 self.selected_file_index = Some(clicked_index);
-                self.setup_ui(surface);
+                // Use optimized update instead of full UI rebuild
+                self.update_file_selection(surface);
                 return true;
             }
         }
@@ -818,8 +885,11 @@ impl FileManager {
                     self.mode = FileManagerMode::DeleteFile;
                     self.setup_ui(surface);
                 } else {
-                    self.status_message = "Please select a file to delete".to_string();
-                    self.setup_ui(surface);
+                    // Use optimized status update instead of full UI rebuild
+                    self.update_status_message(
+                        surface,
+                        "Please select a file to delete".to_string(),
+                    );
                 }
                 return true;
             }
@@ -833,8 +903,8 @@ impl FileManager {
                         self.setup_ui(surface);
                     }
                 } else {
-                    self.status_message = "Please select a file to view".to_string();
-                    self.setup_ui(surface);
+                    // Use optimized status update instead of full UI rebuild
+                    self.update_status_message(surface, "Please select a file to view".to_string());
                 }
                 return true;
             }
@@ -911,15 +981,17 @@ impl FileManager {
 
                     return (true, Some((file, app)));
                 } else {
-                    self.status_message =
-                        "Please select an application to open the file".to_string();
-                    self.setup_ui(surface);
+                    // Use optimized status update instead of full UI rebuild
+                    self.update_status_message(
+                        surface,
+                        "Please select an application to open the file".to_string(),
+                    );
                 }
                 return (true, None);
             }
         }
 
-        if let Some(apps) = &self.open_file_options {
+        if let Some(apps) = &self.open_file_options.clone() {
             for (app_y, app) in apps {
                 if self.is_button_clicked(x, y, MARGIN, *app_y, 200, 20) {
                     self.selected_open_file_app = Some(app.to_string());
@@ -946,10 +1018,8 @@ impl FileManager {
 
     fn create_file(&mut self, surface: &mut Surface) {
         if self.input_text.is_empty() {
-            self.status_message = "Please enter a filename".to_string();
-            if let Some(idx) = self.status_text_idx {
-                surface.update_text_content(idx, self.status_message.clone(), None);
-            }
+            // Use optimized status update instead of full UI rebuild
+            self.update_status_message(surface, "Please enter a filename".to_string());
             return;
         }
 
@@ -961,10 +1031,8 @@ impl FileManager {
                 self.setup_ui(surface);
             }
             Err(e) => {
-                self.status_message = format!("Error creating file: {}", e);
-                if let Some(idx) = self.status_text_idx {
-                    surface.update_text_content(idx, self.status_message.clone(), None);
-                }
+                // Use optimized status update instead of full UI rebuild
+                self.update_status_message(surface, format!("Error creating file: {}", e));
             }
         }
     }
@@ -1000,13 +1068,13 @@ impl FileManager {
                 } else if c == '\n' {
                     // Enter key, create file
                     self.create_file(surface);
+                    return; // create_file handles its own UI updates
                 } else if c.is_ascii() && !c.is_control() {
                     self.input_text.push(c);
                 }
 
-                if let Some(idx) = self.input_text_idx {
-                    surface.update_text_content(idx, format!("{}_", self.input_text), None);
-                }
+                // Use optimized text update instead of full UI rebuild
+                self.update_input_text(surface);
             }
             _ => {}
         }
@@ -1017,9 +1085,8 @@ impl FileManager {
             FileManagerMode::NewFile => match key {
                 KeyCode::Backspace => {
                     self.input_text.pop();
-                    if let Some(idx) = self.input_text_idx {
-                        surface.update_text_content(idx, format!("{}_", self.input_text), None);
-                    }
+                    // Use optimized text update instead of full UI rebuild
+                    self.update_input_text(surface);
                 }
                 _ => {}
             },
@@ -1028,22 +1095,26 @@ impl FileManager {
                     if let Some(ref mut idx) = self.selected_file_index {
                         if *idx > 0 {
                             *idx -= 1;
-                            self.setup_ui(surface);
+                            // Use optimized selection update instead of full UI rebuild
+                            self.update_file_selection(surface);
                         }
                     } else if !self.files.is_empty() {
                         self.selected_file_index = Some(self.files.len() - 1);
-                        self.setup_ui(surface);
+                        // Use optimized selection update instead of full UI rebuild
+                        self.update_file_selection(surface);
                     }
                 }
                 KeyCode::ArrowDown => {
                     if let Some(ref mut idx) = self.selected_file_index {
                         if *idx < self.files.len() - 1 {
                             *idx += 1;
-                            self.setup_ui(surface);
+                            // Use optimized selection update instead of full UI rebuild
+                            self.update_file_selection(surface);
                         }
                     } else if !self.files.is_empty() {
                         self.selected_file_index = Some(0);
-                        self.setup_ui(surface);
+                        // Use optimized selection update instead of full UI rebuild
+                        self.update_file_selection(surface);
                     }
                 }
                 KeyCode::Return => {

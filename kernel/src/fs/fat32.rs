@@ -78,7 +78,7 @@ pub mod cluster_values {
 }
 
 /// Represents a file or directory in the FAT32 filesystem
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileEntry {
     pub name: String,
     pub is_directory: bool,

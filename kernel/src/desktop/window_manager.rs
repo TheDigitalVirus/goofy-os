@@ -9,7 +9,6 @@ use crate::{
         calculator::Calculator, filemanager::FileManager, notepad::Notepad, sysinfo::SysInfo,
     },
     framebuffer::{Color, FrameBufferWriter},
-    fs::fat32::FileEntry,
     surface::{Rect, Surface},
 };
 
@@ -404,8 +403,8 @@ impl WindowManager {
                     let y = (y as usize).saturating_sub(window.y);
 
                     let (_, open_app) = filemanager.handle_click(x, y, &mut window.surface);
-                    if let Some((entry, app)) = open_app {
-                        self.open_app_handler(entry, app);
+                    if let Some((file_path, app)) = open_app {
+                        self.open_app_handler(file_path, app);
                     }
 
                     return (true, None);
@@ -443,9 +442,9 @@ impl WindowManager {
         (false, None)
     }
 
-    fn open_app_handler(&mut self, file: FileEntry, app: String) {
+    fn open_app_handler(&mut self, file_path: String, app: String) {
         match app.as_str() {
-            "notepad" => launch_notepad_with_file(self, file),
+            "notepad" => launch_notepad_with_file(self, file_path),
             "calculator" => launch_calculator(self), // Who tf opens his files in calculator?!
             _ => {}
         }
@@ -595,7 +594,7 @@ pub fn launch_notepad(window_manager: &mut WindowManager) {
     ));
 }
 
-pub fn launch_notepad_with_file(window_manager: &mut WindowManager, file: FileEntry) {
+pub fn launch_notepad_with_file(window_manager: &mut WindowManager, file_path: String) {
     window_manager.add_window(Window::new(
         150,
         150,
@@ -603,7 +602,7 @@ pub fn launch_notepad_with_file(window_manager: &mut WindowManager, file: FileEn
         400,
         2,
         "Notepad".to_string(),
-        Some(Application::Notepad(Notepad::new(Some(file)))),
+        Some(Application::Notepad(Notepad::new(Some(file_path)))),
     ));
 }
 

@@ -967,6 +967,28 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         Ok(dir_entry.first_cluster)
     }
 
+    /// Check if a file exists in a directory
+    pub fn is_file(&mut self, current_cluster: u32, filename: &str) -> Result<bool, &'static str> {
+        if let Some(entry) = self.find_file_in_directory(current_cluster, filename)? {
+            Ok(!entry.is_directory)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Check if a directory exists in a directory
+    pub fn is_directory(
+        &mut self,
+        current_cluster: u32,
+        dirname: &str,
+    ) -> Result<bool, &'static str> {
+        if let Some(entry) = self.find_file_in_directory(current_cluster, dirname)? {
+            Ok(entry.is_directory)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Get the root cluster number
     pub fn get_root_cluster(&self) -> u32 {
         self.boot_sector.root_cluster

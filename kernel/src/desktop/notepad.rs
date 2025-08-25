@@ -7,7 +7,7 @@ use pc_keyboard::KeyCode;
 
 use crate::{
     framebuffer::Color,
-    fs::{fat32::FileEntry, manager::read_text_file},
+    fs::manager::read_text_file,
     serial_println,
     surface::{Shape, Surface},
 };
@@ -24,20 +24,17 @@ pub struct Notepad {
     previous_content: String,
     prev_cursor_x: usize,
     prev_cursor_y: usize,
-    open_file: Option<FileEntry>,
+    open_file_path: Option<String>,
 }
 
 impl Notepad {
-    pub fn new(mut file_entry: Option<FileEntry>) -> Self {
-        let text_content = if let Some(ref file) = file_entry {
-            match read_text_file(file.first_cluster, file.size) {
+    pub fn new(file_path: Option<String>) -> Self {
+        let text_content = if let Some(ref path) = file_path {
+            match read_text_file(path) {
                 Ok(content) => content,
                 Err(error) => {
-                    serial_println!("Failed to open file {}", file.name);
+                    serial_println!("Failed to open file {}", path);
                     serial_println!("Error: {}", error);
-
-                    file_entry = None;
-
                     String::new()
                 }
             }
@@ -57,7 +54,7 @@ impl Notepad {
             previous_content: String::new(),
             prev_cursor_x: 0,
             prev_cursor_y: 0,
-            open_file: file_entry,
+            open_file_path: file_path,
         }
     }
 

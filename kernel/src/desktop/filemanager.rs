@@ -9,12 +9,7 @@ use crate::{
     framebuffer::Color,
     fs::{
         fat32::FileEntry,
-        manager::{
-            create_directory_in_directory, create_directory_in_root, create_file_in_directory,
-            create_file_in_root, delete_directory_from_directory, delete_directory_from_root,
-            delete_file_from_directory, delete_file_from_root, get_root_cluster, is_root_directory,
-            list_directory_files, list_root_files,
-        },
+        manager::{create_directory, create_file, delete_directory, delete_file, list_directory},
     },
     serial_println,
     surface::{Shape, Surface},
@@ -39,7 +34,7 @@ pub enum FileManagerMode {
 
 #[derive(Clone, Debug)]
 pub struct DirectoryPath {
-    pub cluster: u32,
+    pub path: String,
     pub name: String,
 }
 
@@ -53,8 +48,8 @@ pub struct FileManager {
     open_file_options: Option<Vec<(usize, String)>>, // Y offset, name
     selected_open_file_app: Option<String>,
 
-    // Directory navigation
-    current_directory: DirectoryPath,
+    // Directory navigation - now path-based
+    current_path: String,
     directory_stack: Vec<DirectoryPath>,
 
     // UI element indices
@@ -92,16 +87,7 @@ impl FileManager {
             selected_open_file_app: None,
 
             // Initialize at root directory
-            current_directory: match get_root_cluster() {
-                Ok(root) => DirectoryPath {
-                    cluster: root,
-                    name: "/".to_string(),
-                },
-                Err(_) => DirectoryPath {
-                    cluster: 0,
-                    name: "/".to_string(),
-                }, // Fallback, will be handled in refresh_file_list
-            },
+            current_path: "/".to_string(),
             directory_stack: Vec::new(),
 
             status_text_idx: None,
@@ -150,20 +136,10 @@ impl FileManager {
     }
 
     fn refresh_file_list(&mut self) {
-        let files_result = if is_root_directory(self.current_directory.cluster).unwrap_or(true) {
-            list_root_files()
-        } else {
-            list_directory_files(self.current_directory.cluster)
-        };
-
-        match files_result {
+        match list_directory(&self.current_path) {
             Ok(files) => {
-                // Include both files and directories
-                self.files = files
-                    .iter()
-                    .filter(|f: &&FileEntry| f.name != ".")
-                    .cloned()
-                    .collect();
+                // Include both files and directories, filter out "." entry
+                self.files = files.into_iter().filter(|f| f.name != ".").collect();
                 self.status_message = format!("Found {} items", self.files.len());
                 serial_println!("File Manager: Found {} items", self.files.len());
             }
@@ -278,7 +254,7 @@ impl FileManager {
         }));
 
         // Up button (if not in root)
-        if !is_root_directory(self.current_directory.cluster).unwrap_or(false) {
+        if self.current_path != "/" {
             self.up_btn_idx = Some(surface.add_shape(Shape::Rectangle {
                 x: width - 60,
                 y: 8,
@@ -830,16 +806,13 @@ impl FileManager {
     // Navigation methods
     pub fn navigate_up(&mut self) -> Result<(), &'static str> {
         if let Some(parent_dir) = self.directory_stack.pop() {
-            self.current_directory = parent_dir.clone();
+            self.current_path = parent_dir.path;
             self.refresh_file_list();
             self.selected_file_index = None;
             Ok(())
-        } else if !is_root_directory(self.current_directory.cluster).unwrap_or(false) {
+        } else if self.current_path != "/" {
             // Navigate to root if we're not already there
-            self.current_directory = DirectoryPath {
-                cluster: get_root_cluster()?,
-                name: "/".to_string(),
-            };
+            self.current_path = "/".to_string();
             self.refresh_file_list();
             self.selected_file_index = None;
             Ok(())
@@ -851,20 +824,40 @@ impl FileManager {
     pub fn navigate_into_directory(&mut self, dir_name: &str) -> Result<(), &'static str> {
         serial_println!("Navigating into directory: {}", dir_name);
 
+        if dir_name == ".." {
+            return self.navigate_up();
+        }
+
         // Find the directory in current directory
         let dir_entry = self
             .files
             .iter()
             .find(|f| f.is_directory && f.name == dir_name);
 
-        if let Some(dir) = dir_entry {
-            self.directory_stack.push(self.current_directory.clone());
+        if let Some(_dir) = dir_entry {
+            // Save current directory to stack
+            self.directory_stack.push(DirectoryPath {
+                path: self.current_path.clone(),
+                name: if self.current_path == "/" {
+                    "Root".to_string()
+                } else {
+                    self.current_path
+                        .split('/')
+                        .last()
+                        .unwrap_or("Unknown")
+                        .to_string()
+                },
+            });
+
+            serial_println!("Pushed to stack: {:?}", self.directory_stack);
 
             // Navigate to the directory
-            self.current_directory = DirectoryPath {
-                cluster: dir.first_cluster,
-                name: dir.name.clone(),
+            self.current_path = if self.current_path == "/" {
+                format!("/{}", dir_name)
+            } else {
+                format!("{}/{}", self.current_path, dir_name)
             };
+
             self.refresh_file_list();
             self.selected_file_index = None;
             Ok(())
@@ -1304,7 +1297,7 @@ impl FileManager {
         x: usize,
         y: usize,
         surface: &mut Surface,
-    ) -> (bool, Option<(FileEntry, String)>) {
+    ) -> (bool, Option<(String, String)>) {
         match &self.mode {
             FileManagerMode::Browse => (self.handle_browse_click(x, y, surface), None),
             FileManagerMode::NewFile => (self.handle_new_file_click(x, y, surface), None),
@@ -1481,13 +1474,13 @@ impl FileManager {
             return;
         }
 
-        let create_result = if is_root_directory(self.current_directory.cluster).unwrap_or(true) {
-            create_directory_in_root(&self.input_text)
+        let folder_path = if self.current_path == "/" {
+            format!("/{}", self.input_text)
         } else {
-            create_directory_in_directory(self.current_directory.cluster, &self.input_text)
+            format!("{}/{}", self.current_path, self.input_text)
         };
 
-        match create_result {
+        match create_directory(&folder_path) {
             Ok(_) => {
                 self.refresh_file_list();
                 self.mode = FileManagerMode::Browse;
@@ -1512,15 +1505,13 @@ impl FileManager {
                     return;
                 }
 
-                let delete_result = if is_root_directory(self.current_directory.cluster)
-                    .unwrap_or(true)
-                {
-                    delete_directory_from_root(&folder.name)
+                let folder_path = if self.current_path == "/" {
+                    format!("/{}", folder.name)
                 } else {
-                    delete_directory_from_directory(self.current_directory.cluster, &folder.name)
+                    format!("{}/{}", self.current_path, folder.name)
                 };
 
-                match delete_result {
+                match delete_directory(&folder_path) {
                     Ok(_) => {
                         self.refresh_file_list();
                         self.selected_file_index = None;
@@ -1566,7 +1557,7 @@ impl FileManager {
         x: usize,
         y: usize,
         surface: &mut Surface,
-    ) -> (bool, Option<(FileEntry, String)>) {
+    ) -> (bool, Option<(String, String)>) {
         if self.back_btn_idx.is_some() {
             if self.is_button_clicked(x, y, MARGIN, surface.height - 60, 80, BUTTON_HEIGHT) {
                 self.mode = FileManagerMode::Browse;
@@ -1585,11 +1576,17 @@ impl FileManager {
                         .cloned()
                         .unwrap();
 
+                    let file_path = if self.current_path == "/" {
+                        format!("/{}", file.name)
+                    } else {
+                        format!("{}/{}", self.current_path, file.name)
+                    };
+
                     self.selected_open_file_app = None;
                     self.mode = FileManagerMode::Browse;
                     self.setup_ui(surface);
 
-                    return (true, Some((file, app)));
+                    return (true, Some((file_path, app)));
                 } else {
                     // Use optimized status update instead of full UI rebuild
                     self.update_status_message(
@@ -1633,13 +1630,13 @@ impl FileManager {
             return;
         }
 
-        let create_result = if is_root_directory(self.current_directory.cluster).unwrap_or(true) {
-            create_file_in_root(&self.input_text, &[])
+        let file_path = if self.current_path == "/" {
+            format!("/{}", self.input_text)
         } else {
-            create_file_in_directory(self.current_directory.cluster, &self.input_text, &[])
+            format!("{}/{}", self.current_path, self.input_text)
         };
 
-        match create_result {
+        match create_file(&file_path, &[]) {
             Ok(_) => {
                 self.status_message = format!("File '{}' created successfully", self.input_text);
                 self.refresh_file_list();
@@ -1666,14 +1663,13 @@ impl FileManager {
                 }
 
                 let filename = file.name.clone();
-                let delete_result =
-                    if is_root_directory(self.current_directory.cluster).unwrap_or(true) {
-                        delete_file_from_root(&filename)
-                    } else {
-                        delete_file_from_directory(self.current_directory.cluster, &filename)
-                    };
+                let file_path = if self.current_path == "/" {
+                    format!("/{}", filename)
+                } else {
+                    format!("{}/{}", self.current_path, filename)
+                };
 
-                match delete_result {
+                match delete_file(&file_path) {
                     Ok(_) => {
                         self.status_message = format!("File '{}' deleted successfully", filename);
                         self.refresh_file_list();
@@ -1797,18 +1793,10 @@ impl FileManager {
     }
 
     fn get_breadcrumb_text(&self) -> String {
-        if is_root_directory(self.current_directory.cluster).unwrap_or(true) {
+        if self.current_path == "/" {
             "/ (Root)".to_string()
-        } else if self.directory_stack.is_empty() {
-            "/ > ?".to_string()
         } else {
-            serial_println!("Directory stack: {:?}", self.directory_stack);
-            let mut path = String::new();
-            for dir in &self.directory_stack {
-                path.push_str(&format!("{} >  ", dir.name));
-            }
-            path.push_str(self.current_directory.name.as_str());
-            path
+            format!("{}", self.current_path)
         }
     }
 

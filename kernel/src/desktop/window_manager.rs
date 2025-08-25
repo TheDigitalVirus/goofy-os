@@ -400,6 +400,13 @@ impl WindowManager {
                     calculator.handle_mouse_click(x, y);
                     return (true, None);
                 }
+                if let Some(Application::Notepad(notepad)) = &mut window.application {
+                    let x = (x as usize).saturating_sub(window.x);
+                    let y = (y as usize).saturating_sub(window.y);
+
+                    notepad.handle_mouse_click(x, y);
+                    return (true, None);
+                }
                 if let Some(Application::FileManager(filemanager)) = &mut window.application {
                     let x = (x as usize).saturating_sub(window.x);
                     let y = (y as usize).saturating_sub(window.y);

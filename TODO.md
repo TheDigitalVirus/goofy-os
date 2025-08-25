@@ -8,12 +8,14 @@
  - [ ] Rewrite and make a good file explorer
  - [ ] MAKE WINDOWS FOCUSABLE
  - [ ] FS
-   - [ ] Explorer
+   - [x] Explorer
      - [x] Display apps to open file
      - [x] Folders
      - [x] Fix UI rendering to don't redraw everything
    - [ ] Display fs info in sysinfo
-   - [ ] Notepad
+   - [ ] Long names
+   - [ ] Creation/update time
+   - [x] Notepad
      - [x] Save to fs
      - [x] change window title based on file state
-     - [ ] Save as dialog
+     - [x] Save as dialog

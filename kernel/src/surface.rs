@@ -238,7 +238,7 @@ pub struct Surface {
     pub height: usize,
     pub background_color: Color,
     pub just_fill_bg: bool,
-    shapes: Vec<Shape>,
+    pub shapes: Vec<Shape>,
     pub is_dirty: bool,
     pub dirty_regions: Vec<Rect>,
 }

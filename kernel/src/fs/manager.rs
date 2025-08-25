@@ -1,6 +1,5 @@
 use crate::fs::disk::AtaDisk;
 use crate::fs::fat32::{Fat32FileSystem, FileEntry};
-use crate::serial_println;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;

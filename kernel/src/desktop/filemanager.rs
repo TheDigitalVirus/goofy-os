@@ -840,8 +840,6 @@ impl FileManager {
                 },
             });
 
-            serial_println!("Pushed to stack: {:?}", self.directory_stack);
-
             // Navigate to the directory
             self.current_path = if self.current_path == "/" {
                 format!("/{}", dir_name)

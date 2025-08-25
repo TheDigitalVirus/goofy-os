@@ -12,7 +12,7 @@ use crate::{
 };
 use alloc::{format, string::ToString, vec::Vec};
 use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
-use pc_keyboard::{DecodedKey, HandleControl, Keyboard, ScancodeSet1, layouts};
+use pc_keyboard::{DecodedKey, HandleControl, KeyCode, KeyState, Keyboard, ScancodeSet1, layouts};
 
 use x86_64::instructions::interrupts::without_interrupts;
 
@@ -279,15 +279,36 @@ pub fn run_desktop() -> ! {
     let time_update_ticks = 60 * 5; // FPS is somewhere between 60 and 50 (hard to test)
     let mut ticks = 0u64;
 
+    let mut ctrl_pressed = false;
+    let mut shift_pressed = false;
+    let mut alt_pressed = false;
+
     loop {
         for _ in 0..10000 {
             // Poll for scancodes
             if let Some(scancode) = scancode_queue.pop() {
                 if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
+                    match key_event.code {
+                        KeyCode::LControl | KeyCode::RControl => {
+                            ctrl_pressed = key_event.state == KeyState::Down;
+                        }
+                        KeyCode::LShift | KeyCode::RShift => {
+                            shift_pressed = key_event.state == KeyState::Down;
+                        }
+                        KeyCode::LAlt => {
+                            alt_pressed = key_event.state == KeyState::Down;
+                        }
+                        _ => {}
+                    }
                     if let Some(key) = keyboard.process_keyevent(key_event) {
                         match key {
                             DecodedKey::Unicode(character) => {
-                                window_manager.handle_char_input(character);
+                                window_manager.handle_char_input(
+                                    character,
+                                    ctrl_pressed,
+                                    alt_pressed,
+                                    shift_pressed,
+                                );
                             }
                             DecodedKey::RawKey(key) => {
                                 window_manager.handle_key_input(key);

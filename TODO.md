@@ -14,5 +14,6 @@
      - [x] Fix UI rendering to don't redraw everything
    - [ ] Display fs info in sysinfo
    - [ ] Notepad
-     - [ ] Save to fs
-     - [ ] change window title based on file state
+     - [x] Save to fs
+     - [x] change window title based on file state
+     - [ ] Save as dialog

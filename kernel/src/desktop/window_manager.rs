@@ -108,6 +108,8 @@ impl Window {
                 filemanager.render(&mut self.surface);
             }
             Some(Application::Notepad(notepad)) => {
+                self.title = notepad.get_title();
+
                 notepad.render(&mut self.surface);
             }
             Some(Application::SysInfo(sysinfo)) => {
@@ -523,12 +525,18 @@ impl WindowManager {
         dirty_regions
     }
 
-    pub fn handle_char_input(&mut self, ch: char) {
+    pub fn handle_char_input(
+        &mut self,
+        ch: char,
+        ctrl_pressed: bool,
+        _alt_pressed: bool,
+        _shift_pressed: bool,
+    ) {
         // Send character input to the focused window (for now, just the first notepad or filemanager window)
         for window in &mut self.windows {
             match &mut window.application {
                 Some(Application::Notepad(notepad)) => {
-                    notepad.handle_char_input(ch);
+                    notepad.handle_char_input(ch, ctrl_pressed);
                     // break; // Only send to first notepad for now
                 }
                 Some(Application::FileManager(filemanager)) => {

@@ -462,8 +462,127 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         Ok(first_cluster)
     }
 
+    /// Update an existing file with new data, handling cluster allocation/deallocation
+    pub fn update_file(
+        &mut self,
+        dir_cluster: u32,
+        filename: &str,
+        new_data: &[u8],
+    ) -> Result<(), &'static str> {
+        // Find the existing file
+        let file_entry = match self.find_file_in_directory(dir_cluster, filename)? {
+            Some(entry) => entry,
+            None => return Err("File not found"),
+        };
+
+        if file_entry.is_directory {
+            return Err("Cannot update directory as file");
+        }
+
+        let cluster_size = (self.sectors_per_cluster * self.bytes_per_sector) as usize;
+        let old_clusters_needed = if file_entry.size == 0 {
+            0
+        } else {
+            ((file_entry.size as usize + cluster_size - 1) / cluster_size) as u32
+        };
+        let new_clusters_needed = if new_data.is_empty() {
+            0
+        } else {
+            ((new_data.len() + cluster_size - 1) / cluster_size) as u32
+        };
+
+        let new_first_cluster = if new_data.is_empty() {
+            // New file is empty, free all existing clusters
+            if file_entry.first_cluster >= 2 {
+                self.free_cluster_chain(file_entry.first_cluster)?;
+            }
+            0
+        } else if file_entry.first_cluster == 0 {
+            // File was empty, allocate new clusters
+            let first_cluster = self.allocate_cluster_chain(new_clusters_needed)?;
+            self.write_file(first_cluster, new_data)?;
+            first_cluster
+        } else if new_clusters_needed == old_clusters_needed {
+            // Same number of clusters, just overwrite
+            self.write_file(file_entry.first_cluster, new_data)?;
+            file_entry.first_cluster
+        } else if new_clusters_needed < old_clusters_needed {
+            // Fewer clusters needed, write data and free excess clusters
+            self.write_file(file_entry.first_cluster, new_data)?;
+
+            // Find the last cluster we need to keep
+            let mut current_cluster = file_entry.first_cluster;
+            for _ in 1..new_clusters_needed {
+                current_cluster = self.get_next_cluster(current_cluster)?;
+            }
+
+            // Get the next cluster (first one to free)
+            let first_cluster_to_free = self.get_next_cluster(current_cluster)?;
+
+            // Mark the last kept cluster as end of chain
+            self.update_fat_entry(current_cluster, cluster_values::END_OF_CHAIN)?;
+
+            // Free the remaining clusters
+            if first_cluster_to_free < cluster_values::END_OF_CHAIN {
+                self.free_cluster_chain(first_cluster_to_free)?;
+            }
+
+            file_entry.first_cluster
+        } else {
+            // More clusters needed, write to existing and allocate more
+
+            // Write data to existing clusters first
+            let bytes_in_existing_clusters = old_clusters_needed as usize * cluster_size;
+            let bytes_to_write_existing =
+                core::cmp::min(new_data.len(), bytes_in_existing_clusters);
+
+            if bytes_to_write_existing > 0 {
+                self.write_file(
+                    file_entry.first_cluster,
+                    &new_data[..bytes_to_write_existing],
+                )?;
+            }
+
+            // If we need more space, allocate additional clusters
+            if new_data.len() > bytes_in_existing_clusters {
+                let additional_clusters = new_clusters_needed - old_clusters_needed;
+                let new_clusters_start = self.allocate_cluster_chain(additional_clusters)?;
+
+                // Find the last cluster in the existing chain
+                let mut last_existing_cluster = file_entry.first_cluster;
+                for _ in 1..old_clusters_needed {
+                    last_existing_cluster = self.get_next_cluster(last_existing_cluster)?;
+                }
+
+                // Link the new clusters to the existing chain
+                self.update_fat_entry(last_existing_cluster, new_clusters_start)?;
+
+                // Write remaining data to new clusters
+                let remaining_data = &new_data[bytes_in_existing_clusters..];
+                self.write_file(new_clusters_start, remaining_data)?;
+            }
+
+            file_entry.first_cluster
+        };
+
+        // Update the directory entry with new file size and cluster
+        self.update_directory_entry(
+            dir_cluster,
+            filename,
+            new_first_cluster,
+            new_data.len() as u32,
+        )?;
+
+        Ok(())
+    }
+
     /// Write file data to allocated clusters
     pub fn write_file(&mut self, first_cluster: u32, data: &[u8]) -> Result<(), &'static str> {
+        // Safety check: don't write to invalid clusters
+        if first_cluster < 2 {
+            return Err("Invalid cluster number for writing (cannot write to boot sector or FAT)");
+        }
+
         let cluster_size = (self.sectors_per_cluster * self.bytes_per_sector) as usize;
         let mut current_cluster = first_cluster;
         let mut bytes_written = 0;
@@ -668,6 +787,69 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         }
     }
 
+    /// Update a directory entry with new file information
+    fn update_directory_entry(
+        &mut self,
+        dir_cluster: u32,
+        filename: &str,
+        new_first_cluster: u32,
+        new_file_size: u32,
+    ) -> Result<(), &'static str> {
+        let cluster_size = (self.sectors_per_cluster * self.bytes_per_sector) as usize;
+        let entries_per_cluster = cluster_size / mem::size_of::<DirectoryEntry>();
+        let mut current_cluster = dir_cluster;
+
+        loop {
+            let mut cluster_buffer = vec![0u8; cluster_size];
+            self.read_cluster(current_cluster, &mut cluster_buffer)?;
+
+            for i in 0..entries_per_cluster {
+                let entry_offset = i * mem::size_of::<DirectoryEntry>();
+                let mut entry = unsafe {
+                    *(cluster_buffer.as_ptr().add(entry_offset) as *const DirectoryEntry)
+                };
+
+                if entry.name[0] == 0x00 {
+                    return Err("File not found in directory");
+                }
+
+                if entry.name[0] == 0xE5 || entry.attributes == attributes::LONG_NAME {
+                    continue;
+                }
+
+                let entry_file = self.entry_to_file_entry(&entry);
+                if entry_file.name.to_uppercase() == filename.to_uppercase() {
+                    // Update the entry
+                    entry.first_cluster_high = (new_first_cluster >> 16) as u16;
+                    entry.first_cluster_low = (new_first_cluster & 0xFFFF) as u16;
+                    entry.file_size = new_file_size;
+
+                    // Write the updated entry back
+                    let entry_bytes = unsafe {
+                        core::slice::from_raw_parts(
+                            &entry as *const DirectoryEntry as *const u8,
+                            mem::size_of::<DirectoryEntry>(),
+                        )
+                    };
+
+                    cluster_buffer[entry_offset..entry_offset + mem::size_of::<DirectoryEntry>()]
+                        .copy_from_slice(entry_bytes);
+
+                    self.write_cluster(current_cluster, &cluster_buffer)?;
+                    return Ok(());
+                }
+            }
+
+            let next_cluster = self.get_next_cluster(current_cluster)?;
+            if next_cluster >= cluster_values::END_OF_CHAIN {
+                break;
+            }
+            current_cluster = next_cluster;
+        }
+
+        Err("File not found in directory")
+    }
+
     /// Delete a file
     pub fn delete_file(&mut self, dir_cluster: u32, filename: &str) -> Result<(), &'static str> {
         // Find the file
@@ -767,6 +949,11 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
     /// Delete a file from the root directory
     pub fn delete_file_from_root(&mut self, filename: &str) -> Result<(), &'static str> {
         self.delete_file(self.boot_sector.root_cluster, filename)
+    }
+
+    /// Update a file in the root directory
+    pub fn update_file_in_root(&mut self, filename: &str, data: &[u8]) -> Result<(), &'static str> {
+        self.update_file(self.boot_sector.root_cluster, filename, data)
     }
 
     /// Create a new directory

@@ -5,7 +5,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 use spin::Mutex;
-use x86_64::instructions::interrupts;
+use x86_64::instructions::interrupts::{self, without_interrupts};
 
 lazy_static! {
     pub static ref FILESYSTEM: Mutex<Option<Fat32FileSystem<AtaDisk>>> = Mutex::new(None);
@@ -90,12 +90,8 @@ fn resolve_path(path: &str) -> Result<(u32, Option<String>), &'static str> {
     // Check if the last component is a directory
     if let Some(last) = components.last() {
         if fs.is_directory(current_cluster, last)? {
-            serial_println!("Last component is a directory");
-
             current_cluster = fs.navigate_to_directory(current_cluster, last)?;
             return Ok((current_cluster, None));
-        } else {
-            serial_println!("Last component is a file");
         }
     }
 
@@ -245,19 +241,26 @@ pub fn delete_directory(path: &str) -> Result<(), &'static str> {
 
 /// Write data to an existing file by path
 pub fn write_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
-    let file_entry = find_file(path)?.ok_or("File not found")?;
-
-    if file_entry.is_directory {
-        return Err("Path points to a directory, not a file");
-    }
-
-    interrupts::without_interrupts(|| {
-        let mut fs_guard = FILESYSTEM.lock();
-        match fs_guard.as_mut() {
-            Some(fs) => fs.write_file(file_entry.first_cluster, data),
-            None => Err("Filesystem not initialized"),
+    if let Some(file_entry) = find_file(path)? {
+        if file_entry.is_directory {
+            return Err("Path points to a directory, not a file");
         }
-    })
+
+        // Use the new update_file method which handles cluster allocation/deallocation properly
+        let (dir_cluster, filename) = resolve_path(path)?;
+        let filename = filename.ok_or("Invalid file path")?;
+
+        interrupts::without_interrupts(|| {
+            let mut fs_guard = FILESYSTEM.lock();
+            match fs_guard.as_mut() {
+                Some(fs) => fs.update_file(dir_cluster, &filename, data),
+                None => Err("Filesystem not initialized"),
+            }
+        })
+    } else {
+        // File doesn't exist, create it
+        create_file(path, data)
+    }
 }
 
 /// Check if a path exists and return whether it's a file or directory
@@ -290,31 +293,14 @@ pub fn is_file(path: &str) -> Result<bool, &'static str> {
     let (dir_cluster, filename) = resolve_path(path)?;
 
     if let Some(filename) = filename {
-        let mut fs_guard = FILESYSTEM.lock();
-        match fs_guard.as_mut() {
-            Some(fs) => fs.is_file(dir_cluster, &filename),
-            None => Err("Filesystem not initialized"),
-        }
+        without_interrupts(|| {
+            let mut fs_guard = FILESYSTEM.lock();
+            match fs_guard.as_mut() {
+                Some(fs) => fs.is_file(dir_cluster, &filename),
+                None => Err("Filesystem not initialized"),
+            }
+        })
     } else {
         Ok(false)
-    }
-}
-
-pub fn is_directory(path: &str) -> Result<bool, &'static str> {
-    // Handle root directory specially
-    if path == "/" || path.is_empty() {
-        return Ok(true);
-    }
-
-    let (dir_cluster, filename) = resolve_path(path)?;
-
-    if let Some(filename) = filename {
-        let mut fs_guard = FILESYSTEM.lock();
-        match fs_guard.as_mut() {
-            Some(fs) => fs.is_directory(dir_cluster, &filename),
-            None => Err("Filesystem not initialized"),
-        }
-    } else {
-        Ok(true) // Directory path without filename
     }
 }

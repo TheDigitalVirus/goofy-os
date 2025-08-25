@@ -1,4 +1,5 @@
 use alloc::{
+    format,
     string::{String, ToString},
     vec::Vec,
 };
@@ -7,7 +8,7 @@ use pc_keyboard::KeyCode;
 
 use crate::{
     framebuffer::Color,
-    fs::manager::read_text_file,
+    fs::manager::{read_text_file, write_file},
     serial_println,
     surface::{Shape, Surface},
 };
@@ -25,6 +26,7 @@ pub struct Notepad {
     prev_cursor_x: usize,
     prev_cursor_y: usize,
     open_file_path: Option<String>,
+    has_changes: bool,
 }
 
 impl Notepad {
@@ -55,6 +57,7 @@ impl Notepad {
             prev_cursor_x: 0,
             prev_cursor_y: 0,
             open_file_path: file_path,
+            has_changes: false,
         }
     }
 
@@ -85,7 +88,47 @@ impl Notepad {
         self.update_display_lines();
     }
 
-    pub fn handle_char_input(&mut self, ch: char) {
+    fn handle_save(&mut self) {
+        if self.open_file_path.is_none() {
+            unimplemented!("Save As dialog not implemented.");
+        }
+
+        match write_file(
+            self.open_file_path.as_ref().unwrap(),
+            &self.text_content.as_bytes(),
+        ) {
+            Ok(_) => {
+                self.has_changes = false;
+                self.previous_content += " "; // Trigger redraw
+                serial_println!(
+                    "File {} saved successfully.",
+                    self.open_file_path.as_ref().unwrap()
+                );
+            }
+            Err(e) => {
+                serial_println!(
+                    "Failed to save file {}: {}",
+                    self.open_file_path.as_ref().unwrap(),
+                    e
+                );
+            }
+        }
+    }
+
+    pub fn handle_char_input(&mut self, ch: char, ctrl_pressed: bool) {
+        if ctrl_pressed {
+            match ch {
+                's' | 'S' => {
+                    self.handle_save();
+                }
+                'o' | 'O' => {
+                    unimplemented!("Ctrl+O - Open file dialog not implemented.");
+                }
+                _ => {}
+            }
+            return;
+        }
+
         match ch {
             '\u{08}' => {
                 // Backspace
@@ -108,6 +151,8 @@ impl Notepad {
                 self.cursor_position += 1;
             }
         }
+
+        self.has_changes = true;
 
         self.update_display_lines();
         self.update_scroll_if_needed();
@@ -235,5 +280,21 @@ impl Notepad {
             self.prev_cursor_x = cursor_x;
             self.prev_cursor_y = cursor_y;
         }
+    }
+
+    pub fn get_title(&mut self) -> String {
+        let base_title = if let Some(ref path) = self.open_file_path {
+            path.split('/').last().unwrap_or("Untitled").to_string()
+        } else {
+            "Untitled".to_string()
+        };
+
+        let title = if self.has_changes {
+            format!("{}*", base_title)
+        } else {
+            base_title
+        };
+
+        format!("{} - Notepad", title)
     }
 }

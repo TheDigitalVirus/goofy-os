@@ -180,15 +180,6 @@ impl FileManager {
         }
     }
 
-    /// Update app selection highlighting in view mode without rebuilding the entire UI
-    pub fn update_app_selection(&mut self, surface: &mut Surface, selected_app: &str) {
-        self.selected_open_file_app = Some(selected_app.to_string());
-
-        // In a real implementation, we would update the highlighting of the selected app here
-        // For now, we could add a visual indicator by updating the status message
-        self.update_status_message(surface, format!("Selected: {}", selected_app));
-    }
-
     /// Update file selection highlighting without rebuilding the entire UI
     pub fn update_file_selection(&mut self, surface: &mut Surface) {
         if !self.ui_initialized || self.mode != FileManagerMode::Browse {

@@ -58,6 +58,13 @@ pub fn init_filesystem() -> Result<(), &'static str> {
 /// Parse a path into its components and return (directory_cluster, filename)
 /// Returns the cluster of the parent directory and the filename
 fn resolve_path(path: &str) -> Result<(u32, Option<String>), &'static str> {
+    resolve_path_for_operation(path, false)
+}
+
+fn resolve_path_for_operation(
+    path: &str,
+    for_deletion: bool,
+) -> Result<(u32, Option<String>), &'static str> {
     let mut fs_guard = FILESYSTEM.lock();
     let fs = match fs_guard.as_mut() {
         Some(fs) => fs,
@@ -86,16 +93,25 @@ fn resolve_path(path: &str) -> Result<(u32, Option<String>), &'static str> {
         current_cluster = fs.navigate_to_directory(current_cluster, component)?;
     }
 
+    // For deletion operations, we don't navigate into the target directory
+    // We want to return the parent directory and the directory name to delete
+    if for_deletion {
+        let filename = components.last().map(|s| s.to_string());
+        return Ok((current_cluster, filename));
+    }
+
     // Check if the last component is a directory
     if let Some(last) = components.last() {
         if fs.is_directory(current_cluster, last)? {
             current_cluster = fs.navigate_to_directory(current_cluster, last)?;
+
             return Ok((current_cluster, None));
         }
     }
 
     // Return the parent directory cluster and the filename
     let filename = components.last().map(|s| s.to_string());
+
     Ok((current_cluster, filename))
 }
 
@@ -127,12 +143,17 @@ pub fn find_file(path: &str) -> Result<Option<FileEntry>, &'static str> {
 
     let filename = match filename {
         Some(name) => name,
-        None => return Err("Path does not specify a filename"),
+        None => {
+            return Err("Path does not specify a filename");
+        }
     };
 
     let mut fs_guard = FILESYSTEM.lock();
     match fs_guard.as_mut() {
-        Some(fs) => fs.find_file_in_directory(dir_cluster, &filename),
+        Some(fs) => {
+            let result = fs.find_file_in_directory(dir_cluster, &filename);
+            result
+        }
         None => Err("Filesystem not initialized"),
     }
 }
@@ -222,7 +243,7 @@ pub fn create_directory(path: &str) -> Result<(), &'static str> {
 
 /// Delete a directory by path
 pub fn delete_directory(path: &str) -> Result<(), &'static str> {
-    let (parent_cluster, dirname) = resolve_path(path)?;
+    let (parent_cluster, dirname) = resolve_path_for_operation(path, true)?;
 
     let dirname = match dirname {
         Some(name) => name,
@@ -252,7 +273,11 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
         interrupts::without_interrupts(|| {
             let mut fs_guard = FILESYSTEM.lock();
             match fs_guard.as_mut() {
-                Some(fs) => fs.update_file(dir_cluster, &filename, data),
+                Some(fs) => {
+                    let result = fs.update_file(dir_cluster, &filename, data);
+
+                    result
+                }
                 None => Err("Filesystem not initialized"),
             }
         })

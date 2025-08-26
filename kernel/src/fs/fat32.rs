@@ -1,6 +1,7 @@
+use crate::serial_println;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::mem;
 
 /// Boot sector of a FAT32 filesystem
@@ -56,6 +57,20 @@ pub struct DirectoryEntry {
     pub last_write_date: u16,
     pub first_cluster_low: u16,
     pub file_size: u32,
+}
+
+/// Long filename directory entry structure
+#[repr(packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct LongFilenameEntry {
+    pub sequence: u8,       // Sequence number (0x40 bit set for last entry)
+    pub name1: [u16; 5],    // First 5 characters (UTF-16)
+    pub attributes: u8,     // Always 0x0F (LONG_NAME)
+    pub reserved: u8,       // Always 0
+    pub checksum: u8,       // Checksum of 8.3 name
+    pub name2: [u16; 6],    // Next 6 characters (UTF-16)
+    pub first_cluster: u16, // Always 0
+    pub name3: [u16; 2],    // Last 2 characters (UTF-16)
 }
 
 /// File attributes
@@ -139,6 +154,130 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         })
     }
 
+    /// Calculate checksum for 8.3 filename (used by LFN entries)
+    fn calculate_checksum(&self, name_8_3: &[u8; 11]) -> u8 {
+        let mut sum = 0u8;
+        for &byte in name_8_3.iter() {
+            sum = ((sum & 1) << 7).wrapping_add(sum >> 1).wrapping_add(byte);
+        }
+        sum
+    }
+
+    /// Convert UTF-8 string to UTF-16 for LFN entries
+    fn utf8_to_utf16(&self, input: &str) -> Vec<u16> {
+        input.chars().map(|c| c as u16).collect()
+    }
+
+    /// Convert UTF-16 to UTF-8 string from LFN entries
+    fn utf16_to_utf8(&self, input: &[u16]) -> String {
+        let mut result = String::new();
+        for &code_unit in input {
+            if code_unit == 0 || code_unit == 0xFFFF {
+                break; // End of string or padding
+            }
+            if let Some(ch) = char::from_u32(code_unit as u32) {
+                result.push(ch);
+            }
+        }
+        result
+    }
+
+    /// Generate a unique 8.3 filename from a long filename
+    fn generate_short_name(
+        &mut self,
+        dir_cluster: u32,
+        long_name: &str,
+    ) -> Result<[u8; 11], &'static str> {
+        let mut name_8_3 = [b' '; 11];
+
+        // Extract base name and extension
+        let (base_name, extension) = if let Some(dot_pos) = long_name.rfind('.') {
+            (&long_name[..dot_pos], Some(&long_name[dot_pos + 1..]))
+        } else {
+            (long_name, None)
+        };
+
+        // Convert to uppercase and remove invalid characters
+        let clean_base: String = base_name
+            .chars()
+            .filter(|&c| c.is_ascii_alphanumeric() || c == '_')
+            .map(|c| c.to_ascii_uppercase())
+            .collect();
+
+        let clean_ext: Option<String> = extension.map(|ext| {
+            ext.chars()
+                .filter(|&c| c.is_ascii_alphanumeric() || c == '_')
+                .map(|c| c.to_ascii_uppercase())
+                .take(3)
+                .collect()
+        });
+
+        // Try numeric tail generation (NAME~1, NAME~2, etc.)
+        for tail_num in 1..=999999 {
+            // Create base name with tail
+            let tail_str = format!("~{}", tail_num);
+            let max_base_len = 8 - tail_str.len();
+            let truncated_base = if clean_base.len() > max_base_len {
+                &clean_base[..max_base_len]
+            } else {
+                &clean_base
+            };
+
+            let short_base = format!("{}{}", truncated_base, tail_str);
+
+            // Fill in the name part
+            let base_bytes = short_base.as_bytes();
+            let base_len = core::cmp::min(base_bytes.len(), 8);
+            name_8_3[..base_len].copy_from_slice(&base_bytes[..base_len]);
+
+            // Fill in the extension part
+            if let Some(ref ext) = clean_ext {
+                let ext_bytes = ext.as_bytes();
+                let ext_len = core::cmp::min(ext_bytes.len(), 3);
+                name_8_3[8..8 + ext_len].copy_from_slice(&ext_bytes[..ext_len]);
+            }
+
+            // Check if this name already exists
+            let short_name_str = self.name_8_3_to_string(&name_8_3);
+            if self
+                .find_file_in_directory(dir_cluster, &short_name_str)?
+                .is_none()
+            {
+                return Ok(name_8_3);
+            }
+        }
+
+        Err("Could not generate unique short filename")
+    }
+
+    /// Convert 8.3 name array to string
+    fn name_8_3_to_string(&self, name_8_3: &[u8; 11]) -> String {
+        let mut result = String::new();
+
+        // Add base name
+        for i in 0..8 {
+            if name_8_3[i] != b' ' {
+                result.push(name_8_3[i] as char);
+            } else {
+                break;
+            }
+        }
+
+        // Add extension if present
+        if name_8_3[8] != b' ' {
+            result.push('.');
+            for i in 8..11 {
+                if name_8_3[i] != b' ' {
+                    result.push(name_8_3[i] as char);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        result
+    }
+
     /// Get the sector number for a given cluster
     fn cluster_to_sector(&self, cluster: u32) -> u64 {
         if cluster < 2 {
@@ -187,7 +326,7 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         Ok(fat_entry)
     }
 
-    /// Read directory entries from a cluster
+    /// Read directory entries from a cluster with long filename support
     fn read_directory_entries(
         &mut self,
         cluster: u32,
@@ -213,7 +352,7 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
                     return Ok(entries);
                 }
 
-                // Skip deleted entries and long filename entries
+                // Skip deleted entries and long filename entries (we'll process them separately)
                 if entry.name[0] == 0xE5 || entry.attributes == attributes::LONG_NAME {
                     continue;
                 }
@@ -232,26 +371,187 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         Ok(entries)
     }
 
-    /// Convert a directory entry to a FileEntry
-    fn entry_to_file_entry(&self, entry: &DirectoryEntry) -> FileEntry {
-        let mut name = String::new();
+    /// Read directory entries with long filename support
+    fn read_directory_entries_with_lfn(
+        &mut self,
+        cluster: u32,
+    ) -> Result<Vec<(Option<String>, DirectoryEntry)>, &'static str> {
+        let cluster_size = (self.sectors_per_cluster * self.bytes_per_sector) as usize;
+        let mut cluster_buffer = vec![0u8; cluster_size];
+        let mut entries = Vec::new();
+        let mut current_cluster = cluster;
 
-        // Parse the 8.3 filename format
-        let mut i = 0;
-        while i < 8 && entry.name[i] != 0x20 {
-            name.push(entry.name[i] as char);
-            i += 1;
+        loop {
+            self.read_cluster(current_cluster, &mut cluster_buffer)?;
+
+            let entries_per_cluster = cluster_size / mem::size_of::<DirectoryEntry>();
+            let mut lfn_entries: Vec<LongFilenameEntry> = Vec::new();
+
+            for i in 0..entries_per_cluster {
+                let entry_offset = i * mem::size_of::<DirectoryEntry>();
+                let entry = unsafe {
+                    *(cluster_buffer.as_ptr().add(entry_offset) as *const DirectoryEntry)
+                };
+
+                // Check if this is the end of directory entries
+                if entry.name[0] == 0x00 {
+                    return Ok(entries);
+                }
+
+                // Skip deleted entries
+                if entry.name[0] == 0xE5 {
+                    lfn_entries.clear(); // Clear any partial LFN sequence
+                    continue;
+                }
+
+                // Check if this is a long filename entry
+                if entry.attributes == attributes::LONG_NAME {
+                    let lfn_entry = unsafe {
+                        *(cluster_buffer.as_ptr().add(entry_offset) as *const LongFilenameEntry)
+                    };
+                    lfn_entries.push(lfn_entry);
+                    continue;
+                }
+
+                // This is a regular directory entry
+                let long_filename = if !lfn_entries.is_empty() {
+                    // Reconstruct long filename from LFN entries
+                    let reconstructed = self.reconstruct_long_filename(&lfn_entries, &entry)?;
+                    lfn_entries.clear();
+                    reconstructed
+                } else {
+                    None
+                };
+
+                entries.push((long_filename, entry));
+            }
+
+            // Get the next cluster in the chain
+            let next_cluster = self.get_next_cluster(current_cluster)?;
+            if next_cluster >= cluster_values::END_OF_CHAIN {
+                break;
+            }
+            current_cluster = next_cluster;
         }
 
-        // Add extension if present
-        if entry.name[8] != 0x20 {
-            name.push('.');
-            let mut i = 8;
-            while i < 11 && entry.name[i] != 0x20 {
-                name.push(entry.name[i] as char);
-                i += 1;
+        Ok(entries)
+    }
+
+    /// Reconstruct long filename from LFN entries
+    fn reconstruct_long_filename(
+        &self,
+        lfn_entries: &[LongFilenameEntry],
+        dir_entry: &DirectoryEntry,
+    ) -> Result<Option<String>, &'static str> {
+        if lfn_entries.is_empty() {
+            return Ok(None);
+        }
+
+        // Calculate expected checksum
+        let expected_checksum = self.calculate_checksum(&dir_entry.name);
+
+        // Sort LFN entries by sequence number
+        let mut sorted_entries = lfn_entries.to_vec();
+        sorted_entries.sort_by_key(|entry| entry.sequence & 0x3F);
+
+        // Verify checksum consistency
+        for lfn_entry in &sorted_entries {
+            if lfn_entry.checksum != expected_checksum {
+                crate::serial_println!(
+                    "DEBUG: Checksum mismatch! Expected: 0x{:02X}, Got: 0x{:02X}",
+                    expected_checksum,
+                    lfn_entry.checksum
+                );
+                return Ok(None); // Checksum mismatch, ignore LFN
             }
         }
+
+        // Reconstruct filename
+        let mut filename_utf16 = Vec::new();
+        for lfn_entry in sorted_entries {
+            // Process in sequence order (1, 2, 3...) for proper filename reconstruction
+            // Extract characters from the three name fields (using byte-level access)
+            let entry_bytes = unsafe {
+                core::slice::from_raw_parts(
+                    &lfn_entry as *const LongFilenameEntry as *const u8,
+                    mem::size_of::<LongFilenameEntry>(),
+                )
+            };
+
+            let mut found_terminator = false;
+
+            // name1 starts at offset 1 (after sequence byte), 10 bytes
+            for i in 0..5 {
+                let offset = 1 + i * 2;
+                let ch = u16::from_le_bytes([entry_bytes[offset], entry_bytes[offset + 1]]);
+                if ch == 0 {
+                    found_terminator = true;
+                    break;
+                }
+                if ch == 0xFFFF {
+                    break;
+                }
+                filename_utf16.push(ch);
+            }
+
+            if found_terminator {
+                break;
+            }
+
+            // name2 starts at offset 14 (after name1 + attr + reserved + checksum), 12 bytes
+            for i in 0..6 {
+                let offset = 14 + i * 2;
+                let ch = u16::from_le_bytes([entry_bytes[offset], entry_bytes[offset + 1]]);
+                if ch == 0 {
+                    found_terminator = true;
+                    break;
+                }
+                if ch == 0xFFFF {
+                    break;
+                }
+                filename_utf16.push(ch);
+            }
+
+            if found_terminator {
+                break;
+            }
+
+            // name3 starts at offset 28 (after name2 + first_cluster), 4 bytes
+            for i in 0..2 {
+                let offset = 28 + i * 2;
+                let ch = u16::from_le_bytes([entry_bytes[offset], entry_bytes[offset + 1]]);
+                if ch == 0 {
+                    found_terminator = true;
+                    break;
+                }
+                if ch == 0xFFFF {
+                    break;
+                }
+                filename_utf16.push(ch);
+            }
+
+            if found_terminator {
+                break;
+            }
+        }
+
+        let result = self.utf16_to_utf8(&filename_utf16);
+
+        Ok(Some(result))
+    }
+
+    /// Convert a directory entry to a FileEntry with long filename support
+    fn entry_to_file_entry_with_lfn(
+        &self,
+        long_filename: Option<String>,
+        entry: &DirectoryEntry,
+    ) -> FileEntry {
+        let name = if let Some(lfn) = long_filename {
+            lfn
+        } else {
+            // Fall back to 8.3 name
+            self.name_8_3_to_string(&entry.name)
+        };
 
         let first_cluster =
             ((entry.first_cluster_high as u32) << 16) | (entry.first_cluster_low as u32);
@@ -271,16 +571,17 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
 
     /// List files in the root directory
     pub fn list_root_directory(&mut self) -> Result<Vec<FileEntry>, &'static str> {
-        let entries = self.read_directory_entries(self.boot_sector.root_cluster)?;
+        let entries_with_lfn =
+            self.read_directory_entries_with_lfn(self.boot_sector.root_cluster)?;
         let mut files = Vec::new();
 
-        for entry in entries {
+        for (long_filename, entry) in entries_with_lfn {
             // Skip volume labels and system files
             if (entry.attributes & attributes::VOLUME_ID) != 0 {
                 continue;
             }
 
-            files.push(self.entry_to_file_entry(&entry));
+            files.push(self.entry_to_file_entry_with_lfn(long_filename, &entry));
         }
 
         Ok(files)
@@ -288,16 +589,16 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
 
     /// List files in a specific directory
     pub fn list_directory(&mut self, dir_cluster: u32) -> Result<Vec<FileEntry>, &'static str> {
-        let entries = self.read_directory_entries(dir_cluster)?;
+        let entries_with_lfn = self.read_directory_entries_with_lfn(dir_cluster)?;
         let mut files = Vec::new();
 
-        for entry in entries {
+        for (long_filename, entry) in entries_with_lfn {
             // Skip volume labels
             if (entry.attributes & attributes::VOLUME_ID) != 0 {
                 continue;
             }
 
-            files.push(self.entry_to_file_entry(&entry));
+            files.push(self.entry_to_file_entry_with_lfn(long_filename, &entry));
         }
 
         Ok(files)
@@ -339,17 +640,28 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         Ok(file_data)
     }
 
-    /// Find a file in a directory by name
+    /// Find a file in a directory by name (supports both short and long names)
     pub fn find_file_in_directory(
         &mut self,
         dir_cluster: u32,
         filename: &str,
     ) -> Result<Option<FileEntry>, &'static str> {
-        let files = self.list_directory(dir_cluster)?;
+        let entries_with_lfn = self.read_directory_entries_with_lfn(dir_cluster)?;
 
-        for file in files {
-            if file.name.to_uppercase() == filename.to_uppercase() {
-                return Ok(Some(file));
+        for (long_filename, entry) in entries_with_lfn {
+            let file_entry = self.entry_to_file_entry_with_lfn(long_filename.clone(), &entry);
+
+            // Check long filename first, then short filename
+            if file_entry.name.to_uppercase() == filename.to_uppercase() {
+                return Ok(Some(file_entry));
+            }
+
+            // Also check against 8.3 name if no long filename
+            if long_filename.is_none() {
+                let short_name = self.name_8_3_to_string(&entry.name);
+                if short_name.to_uppercase() == filename.to_uppercase() {
+                    return Ok(Some(file_entry));
+                }
             }
         }
 
@@ -472,7 +784,9 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         // Find the existing file
         let file_entry = match self.find_file_in_directory(dir_cluster, filename)? {
             Some(entry) => entry,
-            None => return Err("File not found"),
+            None => {
+                return Err("File not found in directory");
+            }
         };
 
         if file_entry.is_directory {
@@ -659,29 +973,267 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         Ok(())
     }
 
-    /// Convert filename to 8.3 format
-    fn format_filename_8_3(&self, filename: &str) -> [u8; 11] {
-        let mut name_8_3 = [0x20u8; 11]; // Fill with spaces
+    /// Create LFN entries for a long filename
+    fn create_lfn_entries(&self, long_name: &str, checksum: u8) -> Vec<LongFilenameEntry> {
+        let utf16_name = self.utf8_to_utf16(long_name);
+        let mut lfn_entries = Vec::new();
 
-        let filename_upper = filename.to_uppercase();
-        let parts: Vec<&str> = filename_upper.split('.').collect();
+        // Each LFN entry holds 13 characters (5 + 6 + 2)
+        let chars_per_entry = 13;
+        let num_entries = (utf16_name.len() + chars_per_entry - 1) / chars_per_entry;
 
-        // Handle name part (up to 8 characters)
-        let name_part = parts[0];
-        let name_len = core::cmp::min(name_part.len(), 8);
-        name_8_3[..name_len].copy_from_slice(&name_part.as_bytes()[..name_len]);
+        for i in 0..num_entries {
+            let start_idx = i * chars_per_entry;
+            let end_idx = core::cmp::min(start_idx + chars_per_entry, utf16_name.len());
 
-        // Handle extension part (up to 3 characters)
-        if parts.len() > 1 {
-            let ext_part = parts[1];
-            let ext_len = core::cmp::min(ext_part.len(), 3);
-            name_8_3[8..8 + ext_len].copy_from_slice(&ext_part.as_bytes()[..ext_len]);
+            let mut name1 = [0xFFFFu16; 5];
+            let mut name2 = [0xFFFFu16; 6];
+            let mut name3 = [0xFFFFu16; 2];
+
+            let chunk = &utf16_name[start_idx..end_idx];
+            let mut char_idx = 0;
+
+            // Fill name1 (5 chars)
+            for j in 0..5 {
+                if char_idx < chunk.len() {
+                    name1[j] = chunk[char_idx];
+                    char_idx += 1;
+                } else if char_idx == chunk.len() {
+                    name1[j] = 0; // Null terminator
+                    char_idx += 1;
+                } else {
+                    name1[j] = 0xFFFF; // Padding
+                }
+            }
+
+            // Fill name2 (6 chars)
+            for j in 0..6 {
+                if char_idx < chunk.len() {
+                    name2[j] = chunk[char_idx];
+                    char_idx += 1;
+                } else if char_idx == chunk.len() {
+                    name2[j] = 0; // Null terminator
+                    char_idx += 1;
+                } else {
+                    name2[j] = 0xFFFF; // Padding
+                }
+            }
+
+            // Fill name3 (2 chars)
+            for j in 0..2 {
+                if char_idx < chunk.len() {
+                    name3[j] = chunk[char_idx];
+                    char_idx += 1;
+                } else if char_idx == chunk.len() {
+                    name3[j] = 0; // Null terminator
+                    char_idx += 1;
+                } else {
+                    name3[j] = 0xFFFF; // Padding
+                }
+            }
+
+            let sequence = if i == num_entries - 1 {
+                (i + 1) as u8 | 0x40 // Last entry has bit 6 set
+            } else {
+                (i + 1) as u8
+            };
+
+            let mut lfn_entry = LongFilenameEntry {
+                sequence,
+                name1: [0; 5],
+                attributes: attributes::LONG_NAME,
+                reserved: 0,
+                checksum,
+                name2: [0; 6],
+                first_cluster: 0,
+                name3: [0; 2],
+            };
+
+            // Use byte-level operations to avoid packed field issues
+            let entry_bytes = unsafe {
+                core::slice::from_raw_parts_mut(
+                    &mut lfn_entry as *mut LongFilenameEntry as *mut u8,
+                    mem::size_of::<LongFilenameEntry>(),
+                )
+            };
+
+            // Copy name1 to offset 1, 10 bytes (5 UTF-16 chars)
+            for j in 0..5 {
+                let offset = 1 + j * 2;
+                let bytes = name1[j].to_le_bytes();
+                entry_bytes[offset] = bytes[0];
+                entry_bytes[offset + 1] = bytes[1];
+            }
+
+            // Copy name2 to offset 14, 12 bytes (6 UTF-16 chars)
+            for j in 0..6 {
+                let offset = 14 + j * 2;
+                let bytes = name2[j].to_le_bytes();
+                entry_bytes[offset] = bytes[0];
+                entry_bytes[offset + 1] = bytes[1];
+            }
+
+            // Copy name3 to offset 28, 4 bytes (2 UTF-16 chars)
+            for j in 0..2 {
+                let offset = 28 + j * 2;
+                let bytes = name3[j].to_le_bytes();
+                entry_bytes[offset] = bytes[0];
+                entry_bytes[offset + 1] = bytes[1];
+            }
+            lfn_entries.push(lfn_entry);
         }
 
-        name_8_3
+        // LFN entries need to be in reverse order (highest sequence first)
+        lfn_entries.reverse();
+        lfn_entries
     }
 
-    /// Create a directory entry
+    /// Add LFN entries and directory entry to a directory
+    fn add_lfn_directory_entry(
+        &mut self,
+        dir_cluster: u32,
+        filename: &str,
+        dir_entry: &DirectoryEntry,
+    ) -> Result<(), &'static str> {
+        // Check if we need LFN entries (filename longer than 8.3 or contains special chars)
+        let needs_lfn = filename.len() > 12
+            || filename.contains(' ')
+            || filename.chars().any(|c| !c.is_ascii() || c.is_lowercase())
+            || (filename.contains('.') && filename.matches('.').count() > 1);
+
+        if !needs_lfn {
+            // Just add the regular directory entry - find a slot and write it
+            let slots = self.find_directory_entry_slots(dir_cluster, 1)?;
+            let (cluster, slot_index) = slots[0];
+            self.write_directory_entry_at_slot(cluster, slot_index, dir_entry)?;
+            return Ok(());
+        }
+
+        // Create LFN entries
+        let checksum = self.calculate_checksum(&dir_entry.name);
+        let lfn_entries = self.create_lfn_entries(filename, checksum);
+
+        // Find space for all entries (LFN entries + 1 directory entry)
+        let total_entries_needed = lfn_entries.len() + 1;
+        let entry_slots = self.find_directory_entry_slots(dir_cluster, total_entries_needed)?;
+
+        // Write LFN entries first
+        for (i, lfn_entry) in lfn_entries.iter().enumerate() {
+            let slot_cluster = entry_slots[i].0;
+            let slot_index = entry_slots[i].1;
+            self.write_directory_entry_at_slot(slot_cluster, slot_index, lfn_entry)?;
+        }
+
+        // Write the actual directory entry last
+        let final_slot_cluster = entry_slots[lfn_entries.len()].0;
+        let final_slot_index = entry_slots[lfn_entries.len()].1;
+        self.write_directory_entry_at_slot(final_slot_cluster, final_slot_index, dir_entry)?;
+
+        Ok(())
+    }
+
+    /// Find available directory entry slots
+    fn find_directory_entry_slots(
+        &mut self,
+        dir_cluster: u32,
+        num_slots: usize,
+    ) -> Result<Vec<(u32, usize)>, &'static str> {
+        let cluster_size = (self.sectors_per_cluster * self.bytes_per_sector) as usize;
+        let entries_per_cluster = cluster_size / mem::size_of::<DirectoryEntry>();
+        let mut current_cluster = dir_cluster;
+        let mut slots = Vec::new();
+
+        loop {
+            let cluster_buffer = {
+                let mut buffer = vec![0u8; cluster_size];
+                self.read_cluster(current_cluster, &mut buffer)?;
+                buffer
+            };
+
+            for i in 0..entries_per_cluster {
+                let entry_offset = i * mem::size_of::<DirectoryEntry>();
+                let entry = unsafe {
+                    *(cluster_buffer.as_ptr().add(entry_offset) as *const DirectoryEntry)
+                };
+
+                // Check if this slot is available
+                if entry.name[0] == 0x00 || entry.name[0] == 0xE5 {
+                    slots.push((current_cluster, i));
+                    if slots.len() >= num_slots {
+                        return Ok(slots);
+                    }
+                }
+
+                // If we hit end of directory, we can use remaining slots
+                if entry.name[0] == 0x00 {
+                    // Fill remaining slots in this cluster
+                    for j in (i + 1)..entries_per_cluster {
+                        slots.push((current_cluster, j));
+                        if slots.len() >= num_slots {
+                            return Ok(slots);
+                        }
+                    }
+                    break;
+                }
+            }
+
+            // Try next cluster or allocate new one
+            let next_cluster = self.get_next_cluster(current_cluster)?;
+            if next_cluster >= cluster_values::END_OF_CHAIN {
+                if slots.len() < num_slots {
+                    // Need to allocate a new cluster
+                    let new_cluster = self.find_free_cluster()?;
+                    self.update_fat_entry(current_cluster, new_cluster)?;
+                    self.update_fat_entry(new_cluster, cluster_values::END_OF_CHAIN)?;
+
+                    // Add slots from the new cluster
+                    for i in 0..entries_per_cluster {
+                        slots.push((new_cluster, i));
+                        if slots.len() >= num_slots {
+                            return Ok(slots);
+                        }
+                    }
+                }
+                break;
+            }
+            current_cluster = next_cluster;
+        }
+
+        if slots.len() >= num_slots {
+            Ok(slots)
+        } else {
+            Err("Could not find enough directory entry slots")
+        }
+    }
+
+    /// Write a directory entry at a specific slot
+    fn write_directory_entry_at_slot<T>(
+        &mut self,
+        cluster: u32,
+        slot_index: usize,
+        entry: &T,
+    ) -> Result<(), &'static str> {
+        let cluster_size = (self.sectors_per_cluster * self.bytes_per_sector) as usize;
+        let mut cluster_buffer = vec![0u8; cluster_size];
+
+        // Read the cluster
+        self.read_cluster(cluster, &mut cluster_buffer)?;
+
+        // Write the entry
+        let entry_offset = slot_index * mem::size_of::<DirectoryEntry>();
+        let entry_size = mem::size_of::<T>();
+        let entry_bytes =
+            unsafe { core::slice::from_raw_parts(entry as *const T as *const u8, entry_size) };
+
+        cluster_buffer[entry_offset..entry_offset + entry_size].copy_from_slice(entry_bytes);
+
+        // Write the cluster back
+        self.write_cluster(cluster, &cluster_buffer)?;
+
+        Ok(())
+    }
+
+    /// Create a directory entry with long filename support
     fn create_directory_entry(
         &mut self,
         dir_cluster: u32,
@@ -690,7 +1242,18 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         file_size: u32,
         is_directory: bool,
     ) -> Result<(), &'static str> {
-        let name_8_3 = self.format_filename_8_3(filename);
+        // Generate 8.3 name (either from short filename or auto-generated)
+        let name_8_3 = if filename.len() <= 12
+            && !filename.contains(' ')
+            && filename.chars().all(|c| c.is_ascii() && !c.is_lowercase())
+            && filename.matches('.').count() <= 1
+        {
+            // Simple filename that fits 8.3 format
+            self.format_filename_8_3(filename)
+        } else {
+            // Need to generate a short name
+            self.generate_short_name(dir_cluster, filename)?
+        };
 
         // Create the directory entry
         let entry = DirectoryEntry {
@@ -712,79 +1275,32 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
             file_size,
         };
 
-        // Find an empty slot in the directory
-        self.add_directory_entry(dir_cluster, &entry)?;
+        // Add the entry with LFN support
+        self.add_lfn_directory_entry(dir_cluster, filename, &entry)?;
 
         Ok(())
     }
 
-    /// Add a directory entry to a directory
-    fn add_directory_entry(
-        &mut self,
-        dir_cluster: u32,
-        entry: &DirectoryEntry,
-    ) -> Result<(), &'static str> {
-        let cluster_size = (self.sectors_per_cluster * self.bytes_per_sector) as usize;
-        let entries_per_cluster = cluster_size / mem::size_of::<DirectoryEntry>();
-        let mut current_cluster = dir_cluster;
+    /// Convert filename to 8.3 format (legacy method for simple names)
+    fn format_filename_8_3(&self, filename: &str) -> [u8; 11] {
+        let mut name_8_3 = [0x20u8; 11]; // Fill with spaces
 
-        loop {
-            // Read the current cluster
-            let mut cluster_buffer = vec![0u8; cluster_size];
-            self.read_cluster(current_cluster, &mut cluster_buffer)?;
+        let filename_upper = filename.to_uppercase();
+        let parts: Vec<&str> = filename_upper.split('.').collect();
 
-            // Look for an empty slot
-            for i in 0..entries_per_cluster {
-                let entry_offset = i * mem::size_of::<DirectoryEntry>();
-                let existing_entry = unsafe {
-                    *(cluster_buffer.as_ptr().add(entry_offset) as *const DirectoryEntry)
-                };
+        // Handle name part (up to 8 characters)
+        let name_part = parts[0];
+        let name_len = core::cmp::min(name_part.len(), 8);
+        name_8_3[..name_len].copy_from_slice(&name_part.as_bytes()[..name_len]);
 
-                // Check if this slot is empty (deleted or unused)
-                if existing_entry.name[0] == 0x00 || existing_entry.name[0] == 0xE5 {
-                    // Found an empty slot - write the new entry
-                    let entry_bytes = unsafe {
-                        core::slice::from_raw_parts(
-                            entry as *const DirectoryEntry as *const u8,
-                            mem::size_of::<DirectoryEntry>(),
-                        )
-                    };
-
-                    cluster_buffer[entry_offset..entry_offset + mem::size_of::<DirectoryEntry>()]
-                        .copy_from_slice(entry_bytes);
-
-                    // Write the cluster back
-                    self.write_cluster(current_cluster, &cluster_buffer)?;
-                    return Ok(());
-                }
-            }
-
-            // No empty slot found, try next cluster
-            let next_cluster = self.get_next_cluster(current_cluster)?;
-            if next_cluster >= cluster_values::END_OF_CHAIN {
-                // Need to allocate a new cluster for the directory
-                let new_cluster = self.find_free_cluster()?;
-                self.update_fat_entry(current_cluster, new_cluster)?;
-                self.update_fat_entry(new_cluster, cluster_values::END_OF_CHAIN)?;
-
-                // Initialize the new cluster with zeros
-                let mut new_cluster_buffer = vec![0u8; cluster_size];
-
-                // Add the entry to the beginning of the new cluster
-                let entry_bytes = unsafe {
-                    core::slice::from_raw_parts(
-                        entry as *const DirectoryEntry as *const u8,
-                        mem::size_of::<DirectoryEntry>(),
-                    )
-                };
-
-                new_cluster_buffer[..mem::size_of::<DirectoryEntry>()].copy_from_slice(entry_bytes);
-
-                self.write_cluster(new_cluster, &new_cluster_buffer)?;
-                return Ok(());
-            }
-            current_cluster = next_cluster;
+        // Handle extension part (up to 3 characters)
+        if parts.len() > 1 {
+            let ext_part = parts[1];
+            let ext_len = core::cmp::min(ext_part.len(), 3);
+            name_8_3[8..8 + ext_len].copy_from_slice(&ext_part.as_bytes()[..ext_len]);
         }
+
+        name_8_3
     }
 
     /// Update a directory entry with new file information
@@ -803,9 +1319,11 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
             let mut cluster_buffer = vec![0u8; cluster_size];
             self.read_cluster(current_cluster, &mut cluster_buffer)?;
 
+            let mut lfn_entries: Vec<LongFilenameEntry> = Vec::new();
+
             for i in 0..entries_per_cluster {
                 let entry_offset = i * mem::size_of::<DirectoryEntry>();
-                let mut entry = unsafe {
+                let entry = unsafe {
                     *(cluster_buffer.as_ptr().add(entry_offset) as *const DirectoryEntry)
                 };
 
@@ -813,21 +1331,44 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
                     return Err("File not found in directory");
                 }
 
-                if entry.name[0] == 0xE5 || entry.attributes == attributes::LONG_NAME {
+                // Skip deleted entries
+                if entry.name[0] == 0xE5 {
+                    lfn_entries.clear(); // Clear any partial LFN sequence
                     continue;
                 }
 
-                let entry_file = self.entry_to_file_entry(&entry);
+                // Check if this is a long filename entry
+                if entry.attributes == attributes::LONG_NAME {
+                    let lfn_entry = unsafe {
+                        *(cluster_buffer.as_ptr().add(entry_offset) as *const LongFilenameEntry)
+                    };
+                    lfn_entries.push(lfn_entry);
+                    continue;
+                }
+
+                // This is a regular directory entry
+                let long_filename = if !lfn_entries.is_empty() {
+                    // Reconstruct long filename from LFN entries
+                    let reconstructed = self.reconstruct_long_filename(&lfn_entries, &entry)?;
+                    lfn_entries.clear();
+                    reconstructed
+                } else {
+                    None
+                };
+
+                let entry_file = self.entry_to_file_entry_with_lfn(long_filename, &entry);
+
                 if entry_file.name.to_uppercase() == filename.to_uppercase() {
-                    // Update the entry
-                    entry.first_cluster_high = (new_first_cluster >> 16) as u16;
-                    entry.first_cluster_low = (new_first_cluster & 0xFFFF) as u16;
-                    entry.file_size = new_file_size;
+                    // Create a mutable copy of the entry
+                    let mut updated_entry = entry;
+                    updated_entry.first_cluster_high = (new_first_cluster >> 16) as u16;
+                    updated_entry.first_cluster_low = (new_first_cluster & 0xFFFF) as u16;
+                    updated_entry.file_size = new_file_size;
 
                     // Write the updated entry back
                     let entry_bytes = unsafe {
                         core::slice::from_raw_parts(
-                            &entry as *const DirectoryEntry as *const u8,
+                            &updated_entry as *const DirectoryEntry as *const u8,
                             mem::size_of::<DirectoryEntry>(),
                         )
                     };
@@ -880,21 +1421,43 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         }
 
         let mut current_cluster = first_cluster;
+        let mut iteration_count = 0;
 
-        while current_cluster < cluster_values::END_OF_CHAIN {
+        while current_cluster >= 2 && current_cluster < cluster_values::END_OF_CHAIN {
+            iteration_count += 1;
+
+            // Safety check to prevent infinite loops
+            if iteration_count > 10000 {
+                serial_println!(
+                    "[ERROR] free_cluster_chain: Infinite loop detected! Breaking after {} iterations",
+                    iteration_count
+                );
+                return Err("Infinite loop detected in cluster chain");
+            }
+
+            // Get the next cluster BEFORE freeing the current one
             let next_cluster = self.get_next_cluster(current_cluster)?;
+            // Now free the current cluster
             self.update_fat_entry(current_cluster, cluster_values::FREE)?;
 
+            // Check if we've reached the end of the chain
             if next_cluster >= cluster_values::END_OF_CHAIN {
                 break;
             }
+
+            // Additional safety check for invalid clusters
+            if next_cluster < 2 {
+                break;
+            }
+
+            // Move to the next cluster
             current_cluster = next_cluster;
         }
 
         Ok(())
     }
 
-    /// Mark a directory entry as deleted
+    /// Mark a directory entry as deleted (with LFN support)
     fn mark_directory_entry_deleted(
         &mut self,
         dir_cluster: u32,
@@ -908,6 +1471,9 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
             let mut cluster_buffer = vec![0u8; cluster_size];
             self.read_cluster(current_cluster, &mut cluster_buffer)?;
 
+            let mut lfn_start_index: Option<usize> = None;
+            let mut lfn_entries: Vec<LongFilenameEntry> = Vec::new();
+
             for i in 0..entries_per_cluster {
                 let entry_offset = i * mem::size_of::<DirectoryEntry>();
                 let entry = unsafe {
@@ -918,17 +1484,57 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
                     return Err("File not found in directory");
                 }
 
-                if entry.name[0] == 0xE5 || entry.attributes == attributes::LONG_NAME {
+                if entry.name[0] == 0xE5 {
+                    // Reset LFN tracking for deleted entries
+                    lfn_start_index = None;
+                    lfn_entries.clear();
                     continue;
                 }
 
-                let entry_file = self.entry_to_file_entry(&entry);
+                // Check if this is a long filename entry
+                if entry.attributes == attributes::LONG_NAME {
+                    let lfn_entry = unsafe {
+                        *(cluster_buffer.as_ptr().add(entry_offset) as *const LongFilenameEntry)
+                    };
+
+                    if lfn_start_index.is_none() {
+                        lfn_start_index = Some(i);
+                    }
+                    lfn_entries.push(lfn_entry);
+                    continue;
+                }
+
+                // This is a regular directory entry - check if it matches our filename
+                let long_filename = if !lfn_entries.is_empty() {
+                    self.reconstruct_long_filename(&lfn_entries, &entry)?
+                } else {
+                    None
+                };
+
+                let entry_file = self.entry_to_file_entry_with_lfn(long_filename.clone(), &entry);
+
                 if entry_file.name.to_uppercase() == filename.to_uppercase() {
-                    // Mark as deleted
+                    // Found the file! Mark all associated entries as deleted
+
+                    // First, mark any LFN entries as deleted
+                    if let Some(start_idx) = lfn_start_index {
+                        for lfn_idx in start_idx..i {
+                            let lfn_offset = lfn_idx * mem::size_of::<DirectoryEntry>();
+                            cluster_buffer[lfn_offset] = 0xE5;
+                        }
+                    }
+
+                    // Then mark the main directory entry as deleted
                     cluster_buffer[entry_offset] = 0xE5;
+
+                    // Write the updated cluster back to disk
                     self.write_cluster(current_cluster, &cluster_buffer)?;
                     return Ok(());
                 }
+
+                // Reset LFN tracking since this entry didn't match
+                lfn_start_index = None;
+                lfn_entries.clear();
             }
 
             let next_cluster = self.get_next_cluster(current_cluster)?;

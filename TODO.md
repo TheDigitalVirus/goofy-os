@@ -13,7 +13,7 @@
      - [x] Folders
      - [x] Fix UI rendering to don't redraw everything
    - [ ] Display fs info in sysinfo
-   - [ ] Long names
+   - [x] Long names
    - [ ] Creation/update time
    - [x] Notepad
      - [x] Save to fs

@@ -1,4 +1,5 @@
 use crate::serial_println;
+use crate::time::{Date, DateTime, Time, get_utc_time};
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -100,11 +101,9 @@ pub struct FileEntry {
     pub size: u32,
     pub first_cluster: u32,
 
-    pub creation_date: u16,
-    pub creation_time: u16,
-    pub last_access_date: u16,
-    pub last_write_date: u16,
-    pub last_write_time: u16,
+    pub created_at: DateTime,
+    pub last_access_at: Date,
+    pub last_write_at: DateTime,
 }
 
 /// Trait for disk operations
@@ -152,6 +151,41 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
             sectors_per_cluster: boot_sector.sectors_per_cluster as u64,
             bytes_per_sector: boot_sector.bytes_per_sector as u64,
         })
+    }
+
+    /// Convert raw FAT date to Date struct
+    fn raw_date_to_date(&self, raw: u16) -> Date {
+        let year = ((raw >> 9) & 0x7F) + 1980;
+        let month = ((raw >> 5) & 0x0F) as u8;
+        let day = (raw & 0x1F) as u8;
+        Date { day, month, year }
+    }
+
+    /// Converts raw FAT time to Time struct
+    fn raw_time_to_time(&self, raw: u16) -> Time {
+        let hours = ((raw >> 11) & 0x1F) as u8;
+        let minutes = ((raw >> 5) & 0x3F) as u8;
+        let seconds = ((raw & 0x1F) * 2) as u8;
+        Time {
+            millis: 0,
+            seconds,
+            minutes,
+            hours,
+        }
+    }
+
+    fn time_to_raw_time(&self, time: Time) -> u16 {
+        let hours = (time.hours as u16 & 0x1F) << 11;
+        let minutes = (time.minutes as u16 & 0x3F) << 5;
+        let seconds = (time.seconds / 2) as u16 & 0x1F;
+        hours | minutes | seconds
+    }
+
+    fn date_to_raw_date(&self, date: Date) -> u16 {
+        let year = ((date.year - 1980) as u16 & 0x7F) << 9;
+        let month = (date.month as u16 & 0x0F) << 5;
+        let day = date.day as u16 & 0x1F;
+        year | month | day
     }
 
     /// Calculate checksum for 8.3 filename (used by LFN entries)
@@ -556,16 +590,23 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         let first_cluster =
             ((entry.first_cluster_high as u32) << 16) | (entry.first_cluster_low as u32);
 
+        let created_date = self.raw_date_to_date(entry.creation_date);
+        let mut created_time = self.raw_time_to_time(entry.creation_time);
+        created_time.add_millis(entry.creation_time_tenths as u32 * 10); // Creation time in hundredths of a second, although the official FAT Specification from Microsoft says it is tenths of a second. Range 0-199 inclusive.
+
+        let last_access_date = self.raw_date_to_date(entry.last_access_date);
+
+        let last_write_date = self.raw_date_to_date(entry.last_write_date);
+        let last_write_time = self.raw_time_to_time(entry.last_write_time);
+
         FileEntry {
             name,
             is_directory: (entry.attributes & attributes::DIRECTORY) != 0,
             size: entry.file_size,
             first_cluster,
-            creation_date: entry.creation_date,
-            creation_time: entry.creation_time,
-            last_access_date: entry.last_access_date,
-            last_write_date: entry.last_write_date,
-            last_write_time: entry.last_write_time,
+            created_at: DateTime::from_date_and_time(created_date, created_time),
+            last_access_at: last_access_date,
+            last_write_at: DateTime::from_date_and_time(last_write_date, last_write_time),
         }
     }
 
@@ -1255,6 +1296,15 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
             self.generate_short_name(dir_cluster, filename)?
         };
 
+        let now = get_utc_time(); // TODO: Use correct timezone
+
+        let creation_date = self.date_to_raw_date(now.to_date());
+        let creation_time = self.time_to_raw_time(now.to_time());
+        let creation_time_tenths = (now.to_time().seconds % 2) * 100;
+        let last_access_date = creation_date;
+        let last_write_date = creation_date;
+        let last_write_time = creation_time;
+
         // Create the directory entry
         let entry = DirectoryEntry {
             name: name_8_3,
@@ -1264,13 +1314,13 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
                 attributes::ARCHIVE
             },
             reserved: 0,
-            creation_time_tenths: 0,
-            creation_time: 0,
-            creation_date: 0,
-            last_access_date: 0,
+            creation_time_tenths,
+            creation_time,
+            creation_date,
+            last_access_date,
             first_cluster_high: (first_cluster >> 16) as u16,
-            last_write_time: 0,
-            last_write_date: 0,
+            last_write_time,
+            last_write_date,
             first_cluster_low: (first_cluster & 0xFFFF) as u16,
             file_size,
         };
@@ -1359,11 +1409,16 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
                 let entry_file = self.entry_to_file_entry_with_lfn(long_filename, &entry);
 
                 if entry_file.name.to_uppercase() == filename.to_uppercase() {
+                    let now = get_utc_time(); // TODO: Use correct timezone
+
                     // Create a mutable copy of the entry
                     let mut updated_entry = entry;
                     updated_entry.first_cluster_high = (new_first_cluster >> 16) as u16;
                     updated_entry.first_cluster_low = (new_first_cluster & 0xFFFF) as u16;
                     updated_entry.file_size = new_file_size;
+                    updated_entry.last_write_date = self.date_to_raw_date(now.to_date());
+                    updated_entry.last_write_time = self.time_to_raw_time(now.to_time());
+                    updated_entry.last_access_date = self.date_to_raw_date(now.to_date());
 
                     // Write the updated entry back
                     let entry_bytes = unsafe {

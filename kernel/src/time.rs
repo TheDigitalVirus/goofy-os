@@ -1,26 +1,76 @@
 use x86_64::instructions::port::Port;
 
-// Register Index	Value
-// 0x00	Seconds     (0-59)
-// 0x02	Minutes     (0-59)
-// 0x04	Hours       (0-23)
-// 0x07	Day of month (1-31)
-// 0x08	Month       (1-12)
-// 0x09	Year        (0-99)
-// 0x32	Century     (e.g., 20)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Date {
+    pub day: u8,
+    pub month: u8,
+    pub year: u16,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RtcTime {
+pub struct Time {
+    pub millis: u32,
+    pub seconds: u8,
+    pub minutes: u8,
+    pub hours: u8,
+}
+
+impl Time {
+    pub fn add_millis(&mut self, millis: u32) {
+        let total_millis = self.millis + millis;
+        self.millis = total_millis % 1000;
+        let total_seconds = self.seconds as u32 + (total_millis / 1000);
+        self.seconds = (total_seconds % 60) as u8;
+        let total_minutes = self.minutes as u32 + (total_seconds / 60);
+        self.minutes = (total_minutes % 60) as u8;
+        self.hours = ((self.hours as u32 + (total_minutes / 60)) % 24) as u8;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DateTime {
+    pub millis: u32,
     pub seconds: u8,
     pub minutes: u8,
     pub hours: u8,
     pub day: u8,
     pub month: u8,
-    pub year: u16, // Full year, e.g. 2025
+    pub year: u16,
+}
+
+impl DateTime {
+    pub fn to_date(&self) -> Date {
+        Date {
+            day: self.day,
+            month: self.month,
+            year: self.year,
+        }
+    }
+
+    pub fn to_time(&self) -> Time {
+        Time {
+            millis: self.millis,
+            seconds: self.seconds,
+            minutes: self.minutes,
+            hours: self.hours,
+        }
+    }
+
+    pub fn from_date_and_time(date: Date, time: Time) -> Self {
+        DateTime {
+            millis: time.millis,
+            seconds: time.seconds,
+            minutes: time.minutes,
+            hours: time.hours,
+            day: date.day,
+            month: date.month,
+            year: date.year,
+        }
+    }
 }
 
 /// Reads the current time from the RTC.
-fn read_rtc() -> RtcTime {
+fn read_rtc() -> DateTime {
     while is_update_in_progress() {}
 
     let seconds = read_register(0x00);
@@ -42,7 +92,8 @@ fn read_rtc() -> RtcTime {
     let is_bcd = (register_b & 0x04) == 0;
 
     if is_bcd {
-        RtcTime {
+        DateTime {
+            millis: 0,
             seconds: bcd_to_binary(seconds),
             minutes: bcd_to_binary(minutes),
             hours: bcd_to_binary(hours),
@@ -51,7 +102,8 @@ fn read_rtc() -> RtcTime {
             year: (bcd_to_binary(century) as u16 * 100) + bcd_to_binary(year) as u16,
         }
     } else {
-        RtcTime {
+        DateTime {
+            millis: 0,
             seconds,
             minutes,
             hours,
@@ -81,7 +133,7 @@ fn bcd_to_binary(bcd_value: u8) -> u8 {
     (bcd_value & 0x0F) + ((bcd_value >> 4) * 10) // Magic :)
 }
 
-pub fn get_utc_time() -> RtcTime {
+pub fn get_utc_time() -> DateTime {
     read_rtc()
 }
 
@@ -93,6 +145,7 @@ pub fn get_ms_since_epoch() -> i64 {
     let hours = rtc_time.hours as i64;
     let minutes = rtc_time.minutes as i64;
     let seconds = rtc_time.seconds as i64;
+    let millis = rtc_time.millis as i64;
 
     // Calculate the number of days since the epoch (1970-01-01)
     fn is_leap_year(year: i64) -> bool {
@@ -126,7 +179,8 @@ pub fn get_ms_since_epoch() -> i64 {
     let ms_since_epoch = days_since_epoch * 24 * 60 * 60 * 1000
         + hours * 60 * 60 * 1000
         + minutes * 60 * 1000
-        + seconds * 1000;
+        + seconds * 1000
+        + millis;
 
     ms_since_epoch
 }

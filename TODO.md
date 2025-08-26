@@ -14,7 +14,9 @@
      - [x] Fix UI rendering to don't redraw everything
    - [ ] Display fs info in sysinfo
    - [x] Long names
-   - [ ] Creation/update time
+   - [x] Creation/update time
+   - [ ] Display times in the explorer
+   - [ ] Update last access on read
    - [x] Notepad
      - [x] Save to fs
      - [x] change window title based on file state

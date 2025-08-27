@@ -166,18 +166,19 @@ impl Color {
 }
 
 struct CursorBackground {
-    saved_pixels: [u8; CURSOR_BG_DATA_SIZE * 3], // TODO: Don't hardcode this
+    saved_pixels: [u8; CURSOR_BG_DATA_SIZE * 4], // TODO: Don't hardcode this
     previous_pos: Option<(usize, usize)>,
 }
 
 impl CursorBackground {
     fn new(bytes_per_pixel: usize) -> Self {
-        if bytes_per_pixel != 3 {
-            panic!("Cursor background only supports 3 bytes per pixel (RGB).");
+        if bytes_per_pixel > 4 {
+            serial_println!("Cursor background only supports 4 bytes per pixel (RGB).");
+            panic!("Cursor background only supports 4 bytes per pixel (RGB).");
         }
 
         Self {
-            saved_pixels: [0; CURSOR_BG_DATA_SIZE * 3],
+            saved_pixels: [0; CURSOR_BG_DATA_SIZE * 4],
             previous_pos: None,
         }
     }
@@ -202,6 +203,7 @@ impl FrameBufferWriter {
             y_pos: 0,
             cursor_background: CursorBackground::new(info.bytes_per_pixel),
         };
+
         logger.clear();
         logger
     }
@@ -530,10 +532,10 @@ impl FrameBufferWriter {
         let start_offset = (y * self.info.stride + x1) * bytes_per_pixel;
 
         // Convert the color to the appropriate pixel format
-        let color: [u8; 3] = match self.info.pixel_format {
-            PixelFormat::Rgb => [data.r, data.g, data.b],
-            PixelFormat::Bgr => [data.b, data.g, data.r],
-            PixelFormat::U8 => [if data.to_u8() > 200 { 0xf } else { 0 }, 0, 0],
+        let color: [u8; 4] = match self.info.pixel_format {
+            PixelFormat::Rgb => [data.r, data.g, data.b, 0],
+            PixelFormat::Bgr => [data.b, data.g, data.r, 0],
+            PixelFormat::U8 => [if data.to_u8() > 200 { 0xf } else { 0 }, 0, 0, 0],
             _ => {
                 panic!(
                     "pixel format {:?} not supported for writing",
@@ -543,7 +545,7 @@ impl FrameBufferWriter {
         };
 
         // Convert the color slice to the correct length
-        let data: Vec<u8> = color
+        let data: Vec<u8> = color[..bytes_per_pixel]
             .iter()
             .cloned()
             .cycle()
@@ -637,6 +639,7 @@ pub fn init(frame: &'static mut FrameBuffer) {
     FRAMEBUFFER.init_once(|| {
         let info = frame.info();
         let buffer = frame.buffer_mut();
+
         spinning_top::Spinlock::new(FrameBufferWriter::new(buffer, info))
     });
 }

@@ -1,4 +1,4 @@
-use crate::{hlt_loop, println, serial_println};
+use crate::{apic, hlt_loop, print, println, serial_println};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use ps2_mouse::{Mouse, MouseState};
@@ -85,6 +85,8 @@ extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFr
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
     }
+
+    apic::end_interrupt();
 }
 
 extern "x86-interrupt" fn general_protection_fault_handler(
@@ -136,27 +138,28 @@ extern "x86-interrupt" fn double_fault_handler(
 }
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
-    // print!(".");
+    print!(".");
 
     // Notify the Programmable Interrupt Controller (PIC) that the interrupt has been handled
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
+
+    apic::end_interrupt();
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    use x86_64::instructions::port::Port;
-
-    let mut port = Port::new(0x60);
+    let mut port = PortReadOnly::new(0x60);
     let scancode: u8 = unsafe { port.read() };
-    // crate::task::keyboard::add_scancode(scancode);
     crate::desktop::input::add_scancode(scancode);
 
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
     }
+
+    apic::end_interrupt();
 }
 
 #[cfg(test)]

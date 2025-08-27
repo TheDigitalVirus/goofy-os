@@ -163,10 +163,10 @@ impl Handler for MyHandler {
     }
 
     fn sleep(&self, _nanoseconds: u64) {
-        // Stub implementation - would yield to scheduler in a real implementation
+        // Stub implementation
     }
 
-    // Mutex operations - stub implementations for single-threaded OS // TODO
+    // Mutex operations - stub implementations
     fn create_mutex(&self) -> Handle {
         Handle(0) // Stub implementation
     }
@@ -297,6 +297,7 @@ unsafe fn init_local_apic(
     unsafe {
         init_timer(lapic_pointer);
         init_keyboard(lapic_pointer);
+        init_mouse(lapic_pointer);
     };
 }
 
@@ -315,12 +316,18 @@ unsafe fn init_timer(lapic_pointer: *mut u32) {
 
     // Set initial count - smaller value for more frequent interrupts
     let ticr = unsafe { lapic_pointer.offset(APICOffset::Ticr as isize / 4) };
-    unsafe { ticr.write_volatile(1000) }; // Much smaller value than before
+    unsafe { ticr.write_volatile(2_500_000) }; // Very slow // TODO: Spead this up when more processes
 }
 
 unsafe fn init_keyboard(lapic_pointer: *mut u32) {
     let keyboard_register = unsafe { lapic_pointer.offset(APICOffset::LvtLint1 as isize / 4) };
     unsafe { keyboard_register.write_volatile(InterruptIndex::Keyboard as u8 as u32) };
+}
+
+unsafe fn init_mouse(lapic_pointer: *mut u32) {
+    // Configure LINT0 for mouse interrupts (IRQ 12)
+    let mouse_register = unsafe { lapic_pointer.offset(APICOffset::LvtLint0 as isize / 4) };
+    unsafe { mouse_register.write_volatile(InterruptIndex::Mouse as u8 as u32) };
 }
 
 unsafe fn init_io_apic(
@@ -332,12 +339,29 @@ unsafe fn init_io_apic(
 
     let ioapic_pointer = virt_addr.as_mut_ptr::<u32>();
 
-    unsafe { ioapic_pointer.offset(0).write_volatile(0x12) };
+    // Configure keyboard interrupt (IRQ 1 -> interrupt vector 33)
     unsafe {
+        // IRQ 1 uses redirection entry 1: registers 0x12 (low) and 0x13 (high)
+        ioapic_pointer.offset(0).write_volatile(0x12); // Select keyboard redirection entry low
         ioapic_pointer
             .offset(4)
-            .write_volatile(InterruptIndex::Keyboard as u8 as u32)
-    };
+            .write_volatile(InterruptIndex::Keyboard as u8 as u32); // Vector + delivery mode (fixed=000)
+
+        ioapic_pointer.offset(0).write_volatile(0x13); // Select keyboard redirection entry high
+        ioapic_pointer.offset(4).write_volatile(0); // Destination (CPU 0)
+    }
+
+    // Configure mouse interrupt (IRQ 12 -> interrupt vector 44)
+    unsafe {
+        // IRQ 12 uses redirection entry 12: registers 0x28 (low) and 0x29 (high)
+        ioapic_pointer.offset(0).write_volatile(0x28); // Select mouse redirection entry low (0x10 + 12*2)
+        ioapic_pointer
+            .offset(4)
+            .write_volatile(InterruptIndex::Mouse as u8 as u32); // Vector + delivery mode (fixed=000)
+
+        ioapic_pointer.offset(0).write_volatile(0x29); // Select mouse redirection entry high
+        ioapic_pointer.offset(4).write_volatile(0); // Destination (CPU 0)
+    }
 }
 
 fn map_apic(

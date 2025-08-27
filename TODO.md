@@ -17,7 +17,9 @@
    - [x] Creation/update time
    - [ ] Display times in the explorer
    - [ ] Update last access on read
-   - [ ] UEFI support
+   - [x] UEFI support
+   - [ ] Fix UEFI somehow not detecting filesystem correctly
+   - [ ] Disable legacy PIC/APICs when not used
    - [x] Notepad
      - [x] Save to fs
      - [x] change window title based on file state

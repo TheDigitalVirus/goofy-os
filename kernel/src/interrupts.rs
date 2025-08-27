@@ -1,4 +1,4 @@
-use crate::{apic, hlt_loop, print, println, serial_println};
+use crate::{apic, hlt_loop, println, serial_println};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use ps2_mouse::{Mouse, MouseState};
@@ -138,8 +138,6 @@ extern "x86-interrupt" fn double_fault_handler(
 }
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
-    print!(".");
-
     // Notify the Programmable Interrupt Controller (PIC) that the interrupt has been handled
     unsafe {
         PICS.lock()

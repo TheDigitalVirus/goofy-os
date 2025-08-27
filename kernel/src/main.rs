@@ -9,8 +9,8 @@ use core::panic::PanicInfo;
 extern crate alloc;
 
 use bootloader_api::{BootInfo, entry_point};
-use kernel::apic;
 use kernel::sysinfo::{STACK_BASE, get_stack_pointer};
+use kernel::{apic, interrupts as kernel_interrupts};
 use kernel::{desktop::main::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
@@ -52,6 +52,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             &mut frame_allocator,
         )
     };
+
+    kernel_interrupts::init_mouse();
 
     // Some tests for the heap allocator
     let heap_value = alloc::boxed::Box::new(41);

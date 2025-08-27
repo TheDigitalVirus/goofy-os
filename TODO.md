@@ -19,7 +19,7 @@
    - [ ] Update last access on read
    - [x] UEFI support
    - [x] Fix UEFI somehow not detecting filesystem correctly
-   - [ ] Disable legacy PIC/APICs when not used
+   - [x] Disable legacy PIC/APICs when not used
    - [x] Notepad
      - [x] Save to fs
      - [x] change window title based on file state

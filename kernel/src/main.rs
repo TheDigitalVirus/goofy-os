@@ -10,7 +10,7 @@ extern crate alloc;
 
 use bootloader_api::{BootInfo, entry_point};
 use kernel::sysinfo::{STACK_BASE, get_stack_pointer};
-use kernel::{apic, interrupts as kernel_interrupts};
+use kernel::{apic, config, interrupts as kernel_interrupts};
 use kernel::{desktop::main::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
@@ -44,13 +44,15 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
 
-    unsafe {
-        apic::init(
-            *boot_info.rsdp_addr.as_ref().unwrap() as usize,
-            phys_mem_offset,
-            &mut mapper,
-            &mut frame_allocator,
-        )
+    if config::APIC_ENABLED {
+        unsafe {
+            apic::init(
+                *boot_info.rsdp_addr.as_ref().unwrap() as usize,
+                phys_mem_offset,
+                &mut mapper,
+                &mut frame_allocator,
+            )
+        };
     };
 
     kernel_interrupts::init_mouse();

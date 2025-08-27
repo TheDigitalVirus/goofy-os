@@ -4,7 +4,10 @@ use alloc::{
     vec::Vec,
 };
 
-use crate::allocator::{ALLOCATOR, HEAP_SIZE, HEAP_START};
+use crate::{
+    allocator::{ALLOCATOR, HEAP_SIZE, HEAP_START},
+    config,
+};
 
 pub static mut STACK_BASE: usize = 0;
 
@@ -30,9 +33,9 @@ impl SystemInfo {
         let cpu_info = get_cpu_info();
 
         SystemInfo {
-            os_name: "goofy-os".to_string(),
-            os_version: "v0.1.0".to_string(), // This could be read from a config file
-            architecture: "x86_64".to_string(),
+            os_name: config::OS_NAME.to_string(),
+            os_version: config::OS_VERSION.to_string(),
+            architecture: config::ARCHITECTURE.to_string(),
             processor_vendor: cpu_info.vendor_id,
             processor_model: cpu_info.model,
             base_frequency: cpu_info.base_frequency,

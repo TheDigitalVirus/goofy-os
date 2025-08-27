@@ -1,4 +1,4 @@
-use crate::{apic, hlt_loop, println, serial_println};
+use crate::{apic, config, hlt_loop, println, serial_println};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use ps2_mouse::{Mouse, MouseState};
@@ -16,6 +16,7 @@ pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 pub const KEYBOARD_INTERRUPT: u8 = PIC_1_OFFSET + 1;
 pub const MOUSE_INTERRUPT: u8 = PIC_1_OFFSET + 12;
 
+// TODO: Don't do this when config::LEGACY_PIC_ENABLED is false
 pub static PICS: spin::Mutex<ChainedPics> =
     spin::Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
 
@@ -81,12 +82,16 @@ extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFr
     // I spent 3h trying to do it otherwise but none of the solutions worked.
     MOUSE.lock().process_packet(packet);
 
-    unsafe {
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
+    if config::LEGACY_PIC_ENABLED {
+        unsafe {
+            PICS.lock()
+                .notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
+        }
     }
 
-    apic::end_interrupt();
+    if config::APIC_ENABLED {
+        apic::end_interrupt();
+    }
 }
 
 extern "x86-interrupt" fn general_protection_fault_handler(
@@ -138,13 +143,16 @@ extern "x86-interrupt" fn double_fault_handler(
 }
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
-    // Notify the Programmable Interrupt Controller (PIC) that the interrupt has been handled
-    unsafe {
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
+    if config::LEGACY_PIC_ENABLED {
+        // Notify the PICs that the interrupt has been handled
+        unsafe {
+            PICS.lock()
+                .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
+        }
     }
-
-    apic::end_interrupt();
+    if config::APIC_ENABLED {
+        apic::end_interrupt();
+    }
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
@@ -152,12 +160,16 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     let scancode: u8 = unsafe { port.read() };
     crate::desktop::input::add_scancode(scancode);
 
-    unsafe {
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
+    if config::LEGACY_PIC_ENABLED {
+        unsafe {
+            PICS.lock()
+                .notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
+        }
     }
 
-    apic::end_interrupt();
+    if config::APIC_ENABLED {
+        apic::end_interrupt();
+    }
 }
 
 #[cfg(test)]

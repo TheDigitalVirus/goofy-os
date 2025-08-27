@@ -16,6 +16,7 @@ use exit::{QemuExitCode, exit_qemu};
 extern crate alloc;
 
 pub mod allocator;
+pub mod apic;
 pub mod desktop;
 pub mod exit;
 pub mod framebuffer;

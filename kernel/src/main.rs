@@ -9,6 +9,7 @@ use core::panic::PanicInfo;
 extern crate alloc;
 
 use bootloader_api::{BootInfo, entry_point};
+use kernel::apic::parse_acpi;
 use kernel::sysinfo::{STACK_BASE, get_stack_pointer};
 use kernel::{desktop::main::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
 
@@ -42,6 +43,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let mut frame_allocator = unsafe { BootInfoFrameAllocator::init(&boot_info.memory_regions) };
 
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
+
+    let interrupt_model = parse_acpi(
+        *boot_info.rsdp_addr.as_ref().unwrap() as usize,
+        phys_mem_offset,
+    );
+
+    serial_println!("ACPI Interrupt Model: {:?}", interrupt_model);
 
     // Some tests for the heap allocator
     let heap_value = alloc::boxed::Box::new(41);

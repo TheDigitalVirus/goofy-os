@@ -135,7 +135,7 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
             return Err("Invalid boot sector signature");
         }
 
-        if boot_sector.sectors_per_fat_16 != 0 {
+        if boot_sector.sectors_per_fat_16 != 0 || boot_sector.sectors_per_fat_32 == 0 {
             return Err("This is not a FAT32 filesystem (FAT16/12 detected)");
         }
 

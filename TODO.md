@@ -18,7 +18,7 @@
    - [ ] Display times in the explorer
    - [ ] Update last access on read
    - [x] UEFI support
-   - [ ] Fix UEFI somehow not detecting filesystem correctly
+   - [x] Fix UEFI somehow not detecting filesystem correctly
    - [ ] Disable legacy PIC/APICs when not used
    - [x] Notepad
      - [x] Save to fs

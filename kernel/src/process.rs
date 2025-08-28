@@ -6,7 +6,10 @@ use spin::Mutex;
 use x86_64::{
     VirtAddr,
     instructions::interrupts::without_interrupts,
-    structures::paging::{FrameAllocator, PageTableFlags},
+    structures::{
+        idt::InterruptStackFrame,
+        paging::{FrameAllocator, PageTableFlags},
+    },
 };
 
 use crate::{
@@ -110,127 +113,8 @@ impl RegisterState {
             rsp: 0,
         }
     }
-
-    /// Save the current CPU state into this register state
-    pub fn save_current_state(&mut self) {
-        unsafe {
-            // Save registers in chunks to avoid register pressure
-            asm!(
-                "mov {}, rax",
-                "mov {}, rbx",
-                "mov {}, rcx",
-                "mov {}, rdx",
-                out(reg) self.rax,
-                out(reg) self.rbx,
-                out(reg) self.rcx,
-                out(reg) self.rdx,
-            );
-
-            asm!(
-                "mov {}, rsi",
-                "mov {}, rdi",
-                "mov {}, rbp",
-                "mov {}, r8",
-                out(reg) self.rsi,
-                out(reg) self.rdi,
-                out(reg) self.rbp,
-                out(reg) self.r8,
-            );
-
-            asm!(
-                "mov {}, r9",
-                "mov {}, r10",
-                "mov {}, r11",
-                "mov {}, r12",
-                out(reg) self.r9,
-                out(reg) self.r10,
-                out(reg) self.r11,
-                out(reg) self.r12,
-            );
-
-            asm!(
-                "mov {}, r13",
-                "mov {}, r14",
-                "mov {}, r15",
-                "mov {}, rsp",
-                out(reg) self.r13,
-                out(reg) self.r14,
-                out(reg) self.r15,
-                out(reg) self.rsp,
-            );
-
-            asm!(
-                "pushfq",
-                "pop {}",
-                out(reg) self.rflags,
-            );
-        }
-    }
 }
 
-/// Save CPU state from interrupt context
-/// This function captures the complete CPU state during an interrupt
-pub fn save_process_state_from_interrupt() -> RegisterState {
-    let mut state = RegisterState::new();
-    unsafe {
-        // Save registers in chunks to avoid register pressure
-        asm!(
-            "mov {}, rax",
-            "mov {}, rbx",
-            "mov {}, rcx",
-            "mov {}, rdx",
-            out(reg) state.rax,
-            out(reg) state.rbx,
-            out(reg) state.rcx,
-            out(reg) state.rdx,
-        );
-
-        asm!(
-            "mov {}, rsi",
-            "mov {}, rdi",
-            "mov {}, rbp",
-            "mov {}, r8",
-            out(reg) state.rsi,
-            out(reg) state.rdi,
-            out(reg) state.rbp,
-            out(reg) state.r8,
-        );
-
-        asm!(
-            "mov {}, r9",
-            "mov {}, r10",
-            "mov {}, r11",
-            "mov {}, r12",
-            out(reg) state.r9,
-            out(reg) state.r10,
-            out(reg) state.r11,
-            out(reg) state.r12,
-        );
-
-        asm!(
-            "mov {}, r13",
-            "mov {}, r14",
-            "mov {}, r15",
-            out(reg) state.r13,
-            out(reg) state.r14,
-            out(reg) state.r15,
-        );
-
-        // Get flags
-        asm!(
-            "pushfq",
-            "pop {}",
-            out(reg) state.rflags,
-        );
-
-        // Get current stack pointer
-        asm!(
-            "mov {}, rsp",
-            out(reg) state.rsp,
-        );
-    }
-    state
-}
 pub struct ProcessManager {
     processes: Vec<Process>,
     current_pid: u32,
@@ -267,11 +151,8 @@ impl ProcessManager {
 
         // Parse the ELF binary
         let elf = goblin::elf::Elf::parse(binary).expect("Failed to parse ELF");
-        serial_println!("ELF entry point: 0x{:x}", elf.entry);
-        serial_println!("ELF has {} program headers", elf.program_headers.len());
 
         // Create the address space first
-        serial_println!("Creating address space...");
         let mut address_space = ProcessAddressSpace::new(frame_allocator, physical_memory_offset)
             .map_err(|e| {
             serial_println!("Failed to create address space: {:?}", e);
@@ -279,14 +160,12 @@ impl ProcessManager {
         })?;
 
         // Allocate a frame for the stack
-        serial_println!("Allocating stack frame...");
         let stack_frame = frame_allocator.allocate_frame().ok_or_else(|| {
             serial_println!("Failed to allocate stack frame");
             ProcessError::OutOfMemory
         })?;
 
         // Map stack at 0x800000 (8MB mark)
-        serial_println!("Mapping stack...");
         let stack_virtual_addr = VirtAddr::new(0x800000);
         address_space
             .map_user_memory(
@@ -305,19 +184,11 @@ impl ProcessManager {
             })?;
 
         // Copy program data to the mapped memory through virtual memory
-        serial_println!("Loading ELF segments...");
         for (i, ph) in elf.program_headers.iter().enumerate() {
             if ph.p_type != goblin::elf::program_header::PT_LOAD {
                 serial_println!("Skipping non-loadable segment {}", i);
                 continue;
             }
-
-            serial_println!(
-                "Loading segment {} at vaddr 0x{:x}, size {} bytes",
-                i,
-                ph.p_vaddr,
-                ph.p_filesz
-            );
 
             let mem_start = ph.p_vaddr;
             let file_start = ph.p_offset as usize;
@@ -336,18 +207,6 @@ impl ProcessManager {
             let aligned_size = (segment_end_addr + 4095) & !0xfff - (mem_start & !0xfff); // Calculate aligned size
             let pages_needed = aligned_size / 4096;
 
-            serial_println!(
-                "Segment {} needs {} pages ({} bytes)",
-                i,
-                pages_needed,
-                aligned_size
-            );
-            serial_println!(
-                "Original segment virtual address: 0x{:x}, aligned: {:?}",
-                mem_start,
-                segment_virtual_addr
-            );
-
             // Set appropriate flags based on ELF segment permissions
             let mut segment_flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
             if ph.p_flags & goblin::elf::program_header::PF_W != 0 {
@@ -356,15 +215,6 @@ impl ProcessManager {
             if (ph.p_flags & goblin::elf::program_header::PF_X) == 0 {
                 segment_flags |= PageTableFlags::NO_EXECUTE;
             }
-
-            serial_println!(
-                "Segment {} ELF flags: readable={}, writable={}, executable={}",
-                i,
-                (ph.p_flags & goblin::elf::program_header::PF_R) != 0,
-                (ph.p_flags & goblin::elf::program_header::PF_W) != 0,
-                (ph.p_flags & goblin::elf::program_header::PF_X) != 0
-            );
-            serial_println!("Segment {} page flags: {:?}", i, segment_flags);
 
             // Map each page for this segment
             for page_idx in 0..pages_needed {
@@ -379,13 +229,6 @@ impl ProcessManager {
                     );
                     ProcessError::OutOfMemory
                 })?;
-
-                serial_println!(
-                    "Mapping page {} of segment {} at virtual address {:?}",
-                    page_idx,
-                    i,
-                    page_virtual_addr
-                );
 
                 address_space
                     .map_user_memory(
@@ -453,15 +296,6 @@ impl ProcessManager {
                                 data_to_copy.len(),
                             );
                         }
-
-                        serial_println!(
-                            "Copied {} bytes to page {} of segment {} (src_offset: {}, page_offset: {})",
-                            data_to_copy.len(),
-                            page_idx,
-                            i,
-                            src_offset,
-                            data_start_in_page
-                        );
                     } else {
                         // Zero the page if no data to copy
                         let page_virtual_ptr = (physical_memory_offset
@@ -491,13 +325,6 @@ impl ProcessManager {
                     );
                 }
             }
-
-            serial_println!(
-                "Successfully loaded segment {} at {:?} with {} bytes",
-                i,
-                segment_virtual_addr,
-                segment_data.len()
-            );
         }
 
         let stack_pointer = stack_virtual_addr + 0x1000 - 8; // Stack grows downward, point to top of stack minus 8 bytes for alignment
@@ -639,50 +466,11 @@ impl ProcessManager {
         }
     }
 
-    /// Save the current CPU state into the current process
-    pub fn save_current_process_state(
-        &mut self,
-        interrupt_frame: Option<&x86_64::structures::idt::InterruptStackFrame>,
-    ) {
+    pub fn get_current_process_mut(&mut self) -> Option<&mut Process> {
         if self.current_pid == 0 {
-            return; // No current process to save
-        }
-
-        if let Some(process) = self.get_process_mut(self.current_pid) {
-            // If we have an interrupt frame, use it as the primary source of state
-            if let Some(frame) = interrupt_frame {
-                // Use the interrupt frame for the critical state
-                let mut saved_state = RegisterState::new();
-                saved_state.rip = frame.instruction_pointer.as_u64();
-                saved_state.rsp = frame.stack_pointer.as_u64();
-                saved_state.rflags = frame.cpu_flags.bits();
-
-                // For other general-purpose registers, keep them as zero (safe defaults)
-                // Don't capture them from interrupt handler context as that would be garbage
-                // The process will need to reinitialize any registers it cares about
-
-                process.registers = saved_state;
-
-                // Update the process's instruction pointer and stack pointer
-                process.instruction_pointer = VirtAddr::new(saved_state.rip);
-                process.stack_pointer = VirtAddr::new(saved_state.rsp);
-
-                // Mark that this process now has valid saved state
-                process.has_saved_state = true;
-
-                serial_println!(
-                    "Saved state for process {}: RIP=0x{:x}, RSP=0x{:x}, RFLAGS=0x{:x}",
-                    self.current_pid,
-                    saved_state.rip,
-                    saved_state.rsp,
-                    saved_state.rflags
-                );
-            } else {
-                serial_println!(
-                    "No interrupt frame available, skipping state save for process {}",
-                    self.current_pid
-                );
-            }
+            None
+        } else {
+            self.get_process_mut(self.current_pid)
         }
     }
 }
@@ -691,32 +479,11 @@ lazy_static! {
     pub static ref PROCESS_MANAGER: Mutex<ProcessManager> = Mutex::new(ProcessManager::new());
 }
 
-// Main scheduling function called by timer interrupt
-pub fn schedule() -> ! {
-    schedule_with_frame(None)
-}
-
 // Enhanced scheduling function that can save state from interrupt context
-pub fn schedule_with_frame(
-    interrupt_frame: Option<&x86_64::structures::idt::InterruptStackFrame>,
-) -> ! {
+pub fn schedule() -> ! {
     // Only schedule if we're not already in a critical section
     if let Some(mut pm) = PROCESS_MANAGER.try_lock() {
         if let Some(next_pid) = pm.get_next_ready_process() {
-            // Save the current process state before switching
-            if pm.current_pid != 0 {
-                // Check if the current process still exists before saving state
-                if pm.get_process(pm.current_pid).is_some() {
-                    serial_println!("Saving state for process {}", pm.current_pid);
-                    pm.save_current_process_state(interrupt_frame);
-                } else {
-                    serial_println!(
-                        "Current process {} no longer exists, skipping state save",
-                        pm.current_pid
-                    );
-                }
-            }
-
             // Clear the current process
             let current_pid = pm.current_pid;
             if let Some(current_process) = pm.get_process_mut(current_pid) {
@@ -905,69 +672,20 @@ fn perform_kernel_resume(process: &mut Process) -> ! {
         let kernel_code_sel = crate::gdt::GDT.1.code.0 as u64;
         let kernel_data_sel = crate::gdt::GDT.1.data.0 as u64;
 
-        // Switch to a temporary stack and set up iret frame
-        let temp_stack = process.registers.rsp - 128;
-
         asm!(
-            "mov rsp, {temp_stack}",
             "push {ss}",      // SS
             "push {krsp}",    // RSP
             "push {rflags}",  // RFLAGS
             "push {cs}",      // CS
             "push {rip}",     // RIP
-            temp_stack = in(reg) temp_stack,
+            "iretq",
             ss = in(reg) kernel_data_sel,
             krsp = in(reg) process.registers.rsp,
             rflags = in(reg) process.registers.rflags,
             cs = in(reg) kernel_code_sel,
             rip = in(reg) process.registers.rip,
+            options(noreturn)
         );
-
-        // Restore registers in chunks
-        asm!(
-            "mov rax, {rax}",
-            "mov rbx, {rbx}",
-            "mov rcx, {rcx}",
-            "mov rdx, {rdx}",
-            rax = in(reg) process.registers.rax,
-            rbx = in(reg) process.registers.rbx,
-            rcx = in(reg) process.registers.rcx,
-            rdx = in(reg) process.registers.rdx,
-        );
-
-        asm!(
-            "mov rsi, {rsi}",
-            "mov rdi, {rdi}",
-            "mov rbp, {rbp}",
-            "mov r8, {r8}",
-            rsi = in(reg) process.registers.rsi,
-            rdi = in(reg) process.registers.rdi,
-            rbp = in(reg) process.registers.rbp,
-            r8 = in(reg) process.registers.r8,
-        );
-
-        asm!(
-            "mov r9, {r9}",
-            "mov r10, {r10}",
-            "mov r11, {r11}",
-            "mov r12, {r12}",
-            r9 = in(reg) process.registers.r9,
-            r10 = in(reg) process.registers.r10,
-            r11 = in(reg) process.registers.r11,
-            r12 = in(reg) process.registers.r12,
-        );
-
-        asm!(
-            "mov r13, {r13}",
-            "mov r14, {r14}",
-            "mov r15, {r15}",
-            r13 = in(reg) process.registers.r13,
-            r14 = in(reg) process.registers.r14,
-            r15 = in(reg) process.registers.r15,
-        );
-
-        // Switch to kernel process
-        asm!("iretq", options(noreturn));
     }
 }
 
@@ -1228,4 +946,50 @@ pub fn exit_current_process(exit_code: u8) {
 
         serial_println!("Current process exited");
     });
+}
+
+#[inline(always)]
+pub fn save_current_state(frame: &InterruptStackFrame) {
+    let mut pm = PROCESS_MANAGER
+        .try_lock()
+        .expect("Failed to acquire PROCESS_MANAGER lock");
+    let current_process = pm.get_current_process_mut();
+
+    if current_process.is_none() {
+        serial_println!("No current process to save state for");
+        return;
+    }
+
+    let current_process = current_process.unwrap();
+
+    current_process.has_saved_state = true;
+
+    // Test by just saving the basic reqisters
+    unsafe {
+        asm!(
+            "mov qword ptr [{0}], 15", // r15
+            "mov qword ptr [{0} + 8], 14", // r14
+            "mov qword ptr [{0} + 16], 13", // r13
+            "mov qword ptr [{0} + 24], 12", // r12
+            "mov qword ptr [{0} + 32], 11", // r11
+            "mov qword ptr [{0} + 40], 10", // r10
+            "mov qword ptr [{0} + 48], 9",  // r9
+            "mov qword ptr [{0} + 56], 8",  // r8
+            "mov qword ptr [{0} + 64], 7",  // rsi
+            "mov qword ptr [{0} + 72], 6",  // rdi
+            "mov qword ptr [{0} + 80], 5",  // rbp
+            "mov qword ptr [{0} + 88], 4",  // rdx
+            "mov qword ptr [{0} + 96], 3",  // rcx
+            "mov qword ptr [{0} + 104], 2", // rbx
+            "mov qword ptr [{0} + 112], 1", // rax
+
+            in(reg) &mut current_process.registers as *mut RegisterState,
+            // No outputs, but we clobber memory
+            options(nostack, preserves_flags)
+        );
+    }
+
+    current_process.registers.rip = frame.instruction_pointer.as_u64();
+    current_process.registers.rflags = frame.cpu_flags.bits();
+    current_process.registers.rsp = frame.stack_pointer.as_u64();
 }

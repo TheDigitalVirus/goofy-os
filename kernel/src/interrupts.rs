@@ -1,4 +1,4 @@
-use crate::{hlt_loop, print, println, serial_println};
+use crate::{hlt_loop, print, println, process::save_current_state, serial_println};
 use core::arch::asm;
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
@@ -154,6 +154,8 @@ extern "x86-interrupt" fn double_fault_handler(
 }
 
 extern "x86-interrupt" fn timer_handler(stack_frame: InterruptStackFrame) {
+    save_current_state(&stack_frame);
+
     print!(".");
     serial_println!("TIMER");
 
@@ -164,7 +166,7 @@ extern "x86-interrupt" fn timer_handler(stack_frame: InterruptStackFrame) {
     }
 
     // Switch to the next task, passing the interrupt frame to save current process state
-    crate::process::schedule_with_frame(Some(&stack_frame));
+    crate::process::schedule();
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {

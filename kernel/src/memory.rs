@@ -174,26 +174,14 @@ impl ProcessAddressSpace {
             let frame = PhysFrame::containing_address(physical_addr);
             let page = Page::containing_address(virtual_addr);
 
-            serial_println!(
-                "Mapping virtual address {:?} to physical address {:?}, page: {:?}, frame: {:?}",
-                virtual_addr,
-                physical_addr,
-                page,
-                frame
-            );
-
             // Map memory with user accessible flags
             let final_flags = flags | PageTableFlags::USER_ACCESSIBLE;
-            serial_println!("Final page table flags being set: {:?}", final_flags);
 
             mapper
                 .map_to(page, frame, final_flags, frame_allocator)?
                 .flush();
 
             // Check what the page table entry actually contains after mapping
-            if let Ok(frame) = mapper.translate_page(page) {
-                serial_println!("Page table entry after mapping: frame={:?}", frame);
-            }
         }
         Ok(())
     }

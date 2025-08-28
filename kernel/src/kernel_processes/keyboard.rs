@@ -41,15 +41,15 @@ pub fn print_keypresses() -> ! {
     println!("[KEYBOARD] Press keys to see their output. Press ESC to exit.");
 
     loop {
-        if let Some(scancode) = queue.pop() {
-            if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
-                if let Some(key) = keyboard.process_keyevent(key_event) {
-                    match key {
-                        DecodedKey::Unicode(character) => print!("{}", character),
-                        DecodedKey::RawKey(key) => print!("{:?}", key),
-                    }
-                }
-            }
-        }
+        // if let Some(scancode) = queue.pop() {
+        //     if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
+        //         if let Some(key) = keyboard.process_keyevent(key_event) {
+        //             match key {
+        //                 DecodedKey::Unicode(character) => print!("{}", character),
+        //                 DecodedKey::RawKey(key) => print!("{:?}", key),
+        //             }
+        //         }
+        //     }
+        // }
     }
 }

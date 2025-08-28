@@ -22,6 +22,7 @@ https://github.com/user-attachments/assets/ccc8e8ea-2149-4c18-8c31-aaea638619d7
 - **Multiple Applications**:
   - **Calculator**: Full-featured calculator with arithmetic operations
   - **Notepad**: Text editor with cursor support and scrolling
+  - **File Manager**: Complete file explorer with directory navigation
   - **System Information**: Real-time system monitoring and statistics
 
 ### **Core System Features**
@@ -48,6 +49,13 @@ https://github.com/user-attachments/assets/ccc8e8ea-2149-4c18-8c31-aaea638619d7
   - Context switching and scheduling
   - System calls for user applications
 
+- **File System & Storage**:
+  - **FAT32 File System**: Complete implementation with long filename support
+  - **Disk Management**: ATA/IDE disk driver with sector-level access
+  - **File Operations**: Create, read, write, update, and delete files
+  - **Directory Management**: Create, navigate, and delete directories
+  - **Path-based Navigation**: Unix-style path resolution and traversal
+
 ###### Note: processes are developed in the `processes_better` branch and can be extremely unstable.
 
 ### **Graphics & Rendering**
@@ -67,22 +75,82 @@ https://github.com/user-attachments/assets/ccc8e8ea-2149-4c18-8c31-aaea638619d7
 ### **System Architecture**
 - **Global Descriptor Table (GDT)**: Proper x86_64 segmentation
 - **Real-Time Clock (RTC)**: UTC time tracking and second precision
-- **Boot Support**: Both UEFI* and Legacy BIOS compatibility
+- **Boot Support**: Both UEFI and Legacy BIOS compatibility
 - **Cross-Platform**: Designed for x86_64 architecture
 - **No Standard Library**: Complete `#![no_std]` implementation
+
+### **File System**
+- **FAT32 Implementation**: Full-featured filesystem with modern capabilities
+  - **Long Filename Support (LFN)**: Unicode filenames up to 255 characters
+  - **8.3 Compatibility**: Backward compatibility with legacy systems
+  - **Directory Operations**: Create, delete, and navigate nested directories
+  - **File Operations**: Create, read, write, update, and delete files
+  - **Metadata Tracking**: File sizes, timestamps, and attributes
+  - **Cluster Management**: Efficient allocation and deallocation
+  - **Boot Sector Parsing**: Automatic filesystem detection and initialization
+
+- **Storage Stack**:
+  - **ATA/IDE Driver**: Primary and secondary drive support with master/slave configuration
+  - **Sector-Level Access**: 512-byte sector read/write operations
+  - **Multi-Drive Support**: Automatic detection across multiple drives
+  - **Error Handling**: Comprehensive error reporting and recovery
+
+- **Path System**:
+  - **Unix-Style Paths**: Forward slash separated paths (`/folder/file.txt`)
+  - **Absolute and Relative**: Support for both path types
+  - **Path Resolution**: Intelligent parsing and validation
+  - **Directory Traversal**: Safe navigation with proper bounds checking
 
 ### **Development Features**
 - **Debug Support**: Serial logging and QEMU integration
 - **Panic Handling**: Graceful error handling and debugging information
 
 ### Boot Process
-1. **Bootloader**: UEFI*/BIOS bootloader loads kernel
+1. **Bootloader**: UEFI/BIOS bootloader loads kernel
 2. **Memory Setup**: Physical memory mapping and heap initialization
 3. **System Initialization**: GDT, IDT, and interrupt setup
 4. **Hardware Detection**: Framebuffer and input device initialization
-5. **Desktop Launch**: GUI environment with window manager
+5. **File System Mounting**: Automatic FAT32 filesystem detection and mounting
+6. **Desktop Launch**: GUI environment with window manager and applications
 
-###### * UEFI Support is a WIP
+## File System Usage
+
+### Supported Operations
+The filesystem supports all standard file operations:
+
+```rust
+// Directory operations
+list_directory("/")                    // List root directory
+create_directory("/documents")         // Create new directory
+delete_directory("/old_folder")        // Delete empty directory
+
+// File operations  
+create_file("/hello.txt", b"Hello!")   // Create file with content
+read_file("/hello.txt")                // Read file content
+write_file("/hello.txt", b"Updated!")  // Update file content
+delete_file("/hello.txt")              // Delete file
+
+// Path operations
+path_exists("/documents")              // Check if path exists
+is_file("/hello.txt")                  // Check if path is a file
+find_file("/documents/readme.txt")     // Find specific file
+```
+
+### File System Features
+- **Long Filename Support**: Full Unicode support for filenames up to 255 characters
+- **Directory Nesting**: Unlimited directory depth (within FAT32 limits)
+- **File Metadata**: Creation time, modification time, file size, and attributes
+- **Concurrent Access**: Thread-safe filesystem operations
+- **Error Recovery**: Robust error handling with detailed error messages
+
+### File Manager Application
+The built-in File Manager provides a graphical interface for file operations:
+- Browse directories
+- Create new files and folders with keyboard input
+- Delete selected files and folders with confirmation
+- Navigate directory hierarchy with breadcrumb navigation
+- View file sizes with intelligent formatting
+- Double-click files to open with appropriate applications
 
 ## Getting Started
 
@@ -130,7 +198,7 @@ cargo run
 - **Mouse**: Click and drag to interact with windows
 - **Start Menu**: Click "Start" to launch applications
 - **Window Controls**: Drag windows by clicking and holding the title bar
-- **Applications**: Access Calculator, Notepad, and System Info from Start menu
+- **Applications**: Access Calculator, Notepad, File Manager, and System Info from Start menu
 
 ### Applications Guide
 
@@ -146,6 +214,16 @@ cargo run
 - Scrolling support for long documents
 - Real-time text rendering
 
+#### File Manager
+- Directory browsing with breadcrumb navigation
+- File and folder creation/deletion
+- File size display with intelligent formatting (B/KB/MB)
+- File type detection and appropriate application suggestions
+- Path-based navigation (Unix-style paths)
+- Scroll support for large directories
+- Visual file selection with highlighting
+- Support for both files and subdirectories
+
 #### System Information
 - Real-time memory usage statistics
 - CPU information and system details
@@ -160,13 +238,13 @@ cargo run
 ## Roadmap & Future Plans
 
 ### Current Goals (In Progress)
+- [ ] **Enhanced File Operations**: Copy, move, and rename functionality in File Manager
 - [ ] **Window Focus Management**: Implement proper window focusing system
 - [ ] **Taskbar Window List**: Show running applications in taskbar
 - [ ] **Notepad Improvements**: Fix text editing bugs and enhance functionality
 - [ ] **Window Drag Optimizations**: Improve cursor restoration during window dragging
 
 ### Short-term Goals (Next 3 months)
-- [ ] **File System**: Basic FAT32 file system support
 - [ ] **Process Management**: Improve our process scheduling and management
 - [ ] **Network Stack**: Basic TCP/IP implementation
 - [ ] **More Applications**: Image viewer, terminal emulator
@@ -213,7 +291,7 @@ We welcome contributions from developers of all skill levels! Here's how you can
 
 ### Host System (Development)
 - **OS**: Windows, Linux, or macOS
-- **Rust**: 1.75+ with nightly toolchain
+- **Rust**: 2024 with nightly toolchain
 - **Memory**: 4GB RAM minimum, 8GB recommended
 - **Storage**: 2GB free space for build artifacts
 - **Virtualization**: QEMU 6.0+

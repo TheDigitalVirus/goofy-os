@@ -4,16 +4,13 @@ version = 4
 
 [[package]]
 name = "acpi"
-version = "6.0.1"
+version = "4.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c85d96f36022f650ee6f184f1353d077124754cecf6a3e91085a708495c6f5a"
+checksum = "654f48ab3178632ea535be1765073b990895cb62f70a7e5671975d7150c26d15"
 dependencies = [
  "bit_field",
- "bitflags 2.9.1",
- "byteorder",
  "log",
- "pci_types",
- "spinning_top 0.3.0",
+ "rsdp",
 ]
 
 [[package]]
@@ -121,6 +118,10 @@ name = "cfg-if"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9555578bc9e57714c812a1f84e4fc5b4d21fcb063490c624de019f7464c91268"
+
+[[package]]
+name = "config"
+version = "0.1.0"
 
 [[package]]
 name = "conquer-once"
@@ -264,6 +265,7 @@ name = "goofy_os"
 version = "0.1.0"
 dependencies = [
  "bootloader",
+ "config",
  "kernel",
  "ovmf-prebuilt",
 ]
@@ -313,6 +315,7 @@ version = "0.1.0"
 dependencies = [
  "acpi",
  "bootloader_api",
+ "config",
  "conquer-once",
  "crossbeam-queue",
  "futures-util",
@@ -428,16 +431,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0ca629cbb3f0d5b699c338f0129ff78c9bfd7ea8b1258ad529bff490dc8ed5a"
 
 [[package]]
-name = "pci_types"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4325c6aa3cca3373503b1527e75756f9fbfe5fd76be4b4c8a143ee47430b8e0"
-dependencies = [
- "bit_field",
- "bitflags 2.9.1",
-]
-
-[[package]]
 name = "pic8259"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -520,6 +513,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6df7ab838ed27997ba19a4664507e6f82b41fe6e20be42929332156e5e85146"
 dependencies = [
  "bitflags 2.9.1",
+]
+
+[[package]]
+name = "rsdp"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ed5f33bb98eace335c13cdd159fbfc73ce203b597981a76832dfbb9cbd8101b"
+dependencies = [
+ "log",
 ]
 
 [[package]]

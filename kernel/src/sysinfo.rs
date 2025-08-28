@@ -3,10 +3,11 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
+use config::CONFIG;
 
 use crate::{
     allocator::{ALLOCATOR, HEAP_SIZE, HEAP_START},
-    config,
+    gdt::STACK_SIZE,
 };
 
 pub static mut STACK_BASE: usize = 0;
@@ -33,9 +34,9 @@ impl SystemInfo {
         let cpu_info = get_cpu_info();
 
         SystemInfo {
-            os_name: config::OS_NAME.to_string(),
-            os_version: config::OS_VERSION.to_string(),
-            architecture: config::ARCHITECTURE.to_string(),
+            os_name: CONFIG.os_name.to_string(),
+            os_version: CONFIG.os_version.to_string(),
+            architecture: CONFIG.architecture.to_string(),
             processor_vendor: cpu_info.vendor_id,
             processor_model: cpu_info.model,
             base_frequency: cpu_info.base_frequency,
@@ -45,7 +46,7 @@ impl SystemInfo {
             heap_start: HEAP_START,
             heap_used: heap_info.used_bytes,
 
-            stack_size: 4096 * 5, // From gdt.rs STACK_SIZE
+            stack_size: STACK_SIZE,
             cpu_features: cpu_info.features,
         }
     }

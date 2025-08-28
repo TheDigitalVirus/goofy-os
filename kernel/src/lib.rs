@@ -17,7 +17,6 @@ extern crate alloc;
 
 pub mod allocator;
 pub mod apic;
-pub mod config;
 pub mod desktop;
 pub mod exit;
 pub mod framebuffer;
@@ -47,9 +46,10 @@ pub fn init(physical_memory_offset: x86_64::VirtAddr) {
     interrupts::init_idt();
     gdt::init();
 
-    if config::LEGACY_PIC_ENABLED {
-        unsafe { interrupts::PICS.lock().initialize() };
-    }
+    #[cfg(not(uefi))]
+    unsafe {
+        interrupts::PICS.lock().initialize()
+    };
 
     // Disable interrupts to prevent switching to processes before they are initialized
     x86_64::instructions::interrupts::disable();

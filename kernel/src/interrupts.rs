@@ -1,4 +1,7 @@
-use crate::{apic, config, hlt_loop, println, serial_println};
+#[cfg(uefi)]
+use crate::apic;
+use crate::{hlt_loop, println, serial_println};
+
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use ps2_mouse::{Mouse, MouseState};
@@ -82,16 +85,16 @@ extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFr
     // I spent 3h trying to do it otherwise but none of the solutions worked.
     MOUSE.lock().process_packet(packet);
 
-    if config::LEGACY_PIC_ENABLED {
+    #[cfg(not(uefi))]
+    {
         unsafe {
             PICS.lock()
                 .notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
         }
     }
 
-    if config::APIC_ENABLED {
-        apic::end_interrupt();
-    }
+    #[cfg(uefi)]
+    apic::end_interrupt();
 }
 
 extern "x86-interrupt" fn general_protection_fault_handler(
@@ -143,16 +146,14 @@ extern "x86-interrupt" fn double_fault_handler(
 }
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
-    if config::LEGACY_PIC_ENABLED {
-        // Notify the PICs that the interrupt has been handled
-        unsafe {
-            PICS.lock()
-                .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
-        }
+    #[cfg(not(uefi))]
+    unsafe {
+        PICS.lock()
+            .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
-    if config::APIC_ENABLED {
-        apic::end_interrupt();
-    }
+
+    #[cfg(uefi)]
+    apic::end_interrupt();
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
@@ -160,16 +161,16 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     let scancode: u8 = unsafe { port.read() };
     crate::desktop::input::add_scancode(scancode);
 
-    if config::LEGACY_PIC_ENABLED {
+    #[cfg(not(uefi))]
+    {
         unsafe {
             PICS.lock()
                 .notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
         }
     }
 
-    if config::APIC_ENABLED {
-        apic::end_interrupt();
-    }
+    #[cfg(uefi)]
+    apic::end_interrupt();
 }
 
 #[cfg(test)]

@@ -5,14 +5,17 @@ edition = "2024"
 
 [build-dependencies]
 bootloader = "0.11"
+config = { path = "config" }
 kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
 
 [dependencies]
+config = { path = "config" }
+
 # used for UEFI booting in QEMU
 ovmf-prebuilt = "0.1.0-alpha.1"
 
 [workspace]
-members = ["kernel"]
+members = [ "config","kernel"]
 
 [profile.dev]
 panic = "abort"

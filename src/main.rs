@@ -1,20 +1,20 @@
+use config::{BootMode, CONFIG};
+
 fn main() {
     // read env variables that were set in build script
-    let uefi_path = env!("UEFI_PATH");
-    let bios_path = env!("BIOS_PATH");
-
-    // choose whether to start the UEFI or BIOS image
-    let uefi = true; // change to true to use UEFI
+    let (path, uefi) = if CONFIG.boot_mode == BootMode::Uefi {
+        (env!("UEFI_PATH"), true)
+    } else {
+        (env!("BIOS_PATH"), false)
+    };
 
     let mut cmd = std::process::Command::new("qemu-system-x86_64");
     cmd.arg("-serial").arg("stdio");
     if uefi {
         cmd.arg("-bios").arg(ovmf_prebuilt::ovmf_pure_efi());
-        cmd.arg("-drive")
-            .arg(format!("format=raw,file={uefi_path}"));
+        cmd.arg("-drive").arg(format!("format=raw,file={path}"));
     } else {
-        cmd.arg("-drive")
-            .arg(format!("format=raw,file={bios_path}"));
+        cmd.arg("-drive").arg(format!("format=raw,file={path}"));
     }
 
     cmd.arg("-drive")

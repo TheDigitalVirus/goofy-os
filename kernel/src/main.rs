@@ -27,7 +27,7 @@ use x86_64::{
     instructions::interrupts,
     registers::{
         control::{Efer, EferFlags},
-        model_specific::{LStar, Msr, SFMask, Star},
+        model_specific::{LStar, SFMask, Star},
         rflags::RFlags,
     },
 };
@@ -158,9 +158,4 @@ fn panic(info: &PanicInfo) -> ! {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     kernel::test_panic_handler(info)
-}
-
-fn syscall_entry_point() {
-    // Implement syscall entry point logic here
-    serial_println!("Ello");
 }

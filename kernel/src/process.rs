@@ -660,6 +660,9 @@ fn perform_kernel_resume(process: &mut Process) -> ! {
     serial_println!("Restoring kernel register state: {:?}", process.registers);
 
     unsafe {
+        // Disable interrupts during the critical context switch section
+        x86_64::instructions::interrupts::disable();
+
         // Ensure we're using the kernel's page table
         let kernel_cr3 = x86_64::registers::control::Cr3::read()
             .0
@@ -668,22 +671,59 @@ fn perform_kernel_resume(process: &mut Process) -> ! {
         asm!("mov cr3, {}", in(reg) kernel_cr3);
         x86_64::instructions::tlb::flush_all();
 
-        // Get kernel selectors
-        let kernel_code_sel = crate::gdt::GDT.1.code.0 as u64;
-        let kernel_data_sel = crate::gdt::GDT.1.data.0 as u64;
+        // Get kernel selectors - construct proper selector values
+        let kernel_code_sel = (crate::gdt::GDT.1.code.index() << 3) as u64; // RPL = 0 for kernel
+        let kernel_data_sel = (crate::gdt::GDT.1.data.index() << 3) as u64; // RPL = 0 for kernel
+
+        // Validate and set up temporary stack area for iretq setup
+        // Ensure we have enough space and the stack is valid
+        let temp_stack = process.registers.rsp.saturating_sub(256); // Use larger offset for safety
 
         asm!(
+            // Set up a temporary stack frame for iretq
+            "mov rsp, {temp_stack}",
             "push {ss}",      // SS
             "push {krsp}",    // RSP
             "push {rflags}",  // RFLAGS
             "push {cs}",      // CS
             "push {rip}",     // RIP
+
+            // Set up kernel segments
+            "mov ax, {data_sel:x}",
+            "mov ds, ax",
+            "mov es, ax",
+            "mov fs, ax",
+            "mov gs, ax",
+
+            // Restore all general-purpose registers from saved state
+            "mov r15, qword ptr [{registers}]",
+            "mov r14, qword ptr [{registers} + 8]",
+            "mov r13, qword ptr [{registers} + 16]",
+            "mov r12, qword ptr [{registers} + 24]",
+            "mov r11, qword ptr [{registers} + 32]",
+            "mov r10, qword ptr [{registers} + 40]",
+            "mov r9, qword ptr [{registers} + 48]",
+            "mov r8, qword ptr [{registers} + 56]",
+            "mov rsi, qword ptr [{registers} + 64]",
+            "mov rdi, qword ptr [{registers} + 72]",
+            "mov rbp, qword ptr [{registers} + 80]",
+            "mov rdx, qword ptr [{registers} + 88]",
+            "mov rcx, qword ptr [{registers} + 96]",
+            "mov rbx, qword ptr [{registers} + 104]",
+            "mov rax, qword ptr [{registers} + 112]",
+
+            // Now perform iretq to restore RIP, RSP, RFLAGS, and segments
+            // This will also re-enable interrupts if they were enabled in saved RFLAGS
             "iretq",
+
+            temp_stack = in(reg) temp_stack,
             ss = in(reg) kernel_data_sel,
             krsp = in(reg) process.registers.rsp,
             rflags = in(reg) process.registers.rflags,
             cs = in(reg) kernel_code_sel,
             rip = in(reg) process.registers.rip,
+            data_sel = in(reg) kernel_data_sel as u16,
+            registers = in(reg) &process.registers as *const RegisterState,
             options(noreturn)
         );
     }
@@ -795,79 +835,27 @@ fn switch_to_user_mode_resume(process: &Process) -> ! {
     unsafe {
         // First, set up segments
         asm!(
-            "mov ax, {0:x}",
+            "mov ax, {ss:x}",
             "mov ds, ax",
             "mov es, ax",
             "mov fs, ax",
             "mov gs, ax",
-            in(reg) user_data_sel as u16,
-        );
 
-        // Create space on stack for the iret frame
-        let temp_stack = process.registers.rsp - 128; // Give ourselves some space
-
-        // Switch to our temporary stack and push iret frame
-        asm!(
-            "mov rsp, {temp_stack}",
             "push {ss}",      // SS
             "push {user_rsp}", // RSP
             "push {rflags}",  // RFLAGS
             "push {cs}",      // CS
             "push {rip}",     // RIP
-            temp_stack = in(reg) temp_stack,
+            "iretq",
             ss = in(reg) user_data_sel,
             user_rsp = in(reg) process.registers.rsp,
             rflags = in(reg) process.registers.rflags,
             cs = in(reg) user_code_sel,
             rip = in(reg) process.registers.rip,
-        );
 
-        // Now restore registers in chunks to avoid register pressure
-        asm!(
-            "mov rax, {rax}",
-            "mov rbx, {rbx}",
-            "mov rcx, {rcx}",
-            "mov rdx, {rdx}",
-            rax = in(reg) process.registers.rax,
-            rbx = in(reg) process.registers.rbx,
-            rcx = in(reg) process.registers.rcx,
-            rdx = in(reg) process.registers.rdx,
+            options(noreturn)
         );
-
-        asm!(
-            "mov rsi, {rsi}",
-            "mov rdi, {rdi}",
-            "mov rbp, {rbp}",
-            "mov r8, {r8}",
-            rsi = in(reg) process.registers.rsi,
-            rdi = in(reg) process.registers.rdi,
-            rbp = in(reg) process.registers.rbp,
-            r8 = in(reg) process.registers.r8,
-        );
-
-        asm!(
-            "mov r9, {r9}",
-            "mov r10, {r10}",
-            "mov r11, {r11}",
-            "mov r12, {r12}",
-            r9 = in(reg) process.registers.r9,
-            r10 = in(reg) process.registers.r10,
-            r11 = in(reg) process.registers.r11,
-            r12 = in(reg) process.registers.r12,
-        );
-
-        asm!(
-            "mov r13, {r13}",
-            "mov r14, {r14}",
-            "mov r15, {r15}",
-            r13 = in(reg) process.registers.r13,
-            r14 = in(reg) process.registers.r14,
-            r15 = in(reg) process.registers.r15,
-        );
-
-        // Finally, switch to user mode
-        asm!("iretq", options(noreturn));
-    }
+    };
 }
 
 pub fn queue_kernel_process(entry_point: fn() -> !) {
@@ -964,27 +952,24 @@ pub fn save_current_state(frame: &InterruptStackFrame) {
 
     current_process.has_saved_state = true;
 
-    // Test by just saving the basic reqisters
     unsafe {
         asm!(
-            "mov qword ptr [{0}], 15", // r15
-            "mov qword ptr [{0} + 8], 14", // r14
-            "mov qword ptr [{0} + 16], 13", // r13
-            "mov qword ptr [{0} + 24], 12", // r12
-            "mov qword ptr [{0} + 32], 11", // r11
-            "mov qword ptr [{0} + 40], 10", // r10
-            "mov qword ptr [{0} + 48], 9",  // r9
-            "mov qword ptr [{0} + 56], 8",  // r8
-            "mov qword ptr [{0} + 64], 7",  // rsi
-            "mov qword ptr [{0} + 72], 6",  // rdi
-            "mov qword ptr [{0} + 80], 5",  // rbp
-            "mov qword ptr [{0} + 88], 4",  // rdx
-            "mov qword ptr [{0} + 96], 3",  // rcx
-            "mov qword ptr [{0} + 104], 2", // rbx
-            "mov qword ptr [{0} + 112], 1", // rax
-
+            "mov qword ptr [{0}], r15",
+            "mov qword ptr [{0} + 8], r14",
+            "mov qword ptr [{0} + 16], r13",
+            "mov qword ptr [{0} + 24], r12",
+            "mov qword ptr [{0} + 32], r11",
+            "mov qword ptr [{0} + 40], r10",
+            "mov qword ptr [{0} + 48], r9",
+            "mov qword ptr [{0} + 56], r8",
+            "mov qword ptr [{0} + 64], rsi",
+            "mov qword ptr [{0} + 72], rdi",
+            "mov qword ptr [{0} + 80], rbp",
+            "mov qword ptr [{0} + 88], rdx",
+            "mov qword ptr [{0} + 96], rcx",
+            "mov qword ptr [{0} + 104], rbx",
+            "mov qword ptr [{0} + 112], rax",
             in(reg) &mut current_process.registers as *mut RegisterState,
-            // No outputs, but we clobber memory
             options(nostack, preserves_flags)
         );
     }

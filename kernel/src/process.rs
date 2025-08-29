@@ -8,7 +8,7 @@ use x86_64::{
     instructions::interrupts::without_interrupts,
     structures::{
         idt::InterruptStackFrame,
-        paging::{FrameAllocator, PageTableFlags},
+        paging::{FrameAllocator, PageTableFlags, PhysFrame, Size4KiB},
     },
 };
 
@@ -39,6 +39,158 @@ pub enum ProcessError {
     InvalidStackPointer,
 }
 
+/// Memory validation functions to prevent page faults during context switching
+impl ProcessError {
+    /// Validate that a virtual address is properly aligned and within reasonable bounds
+    fn validate_virtual_address(addr: VirtAddr, name: &str) -> Result<(), ProcessError> {
+        let addr_u64 = addr.as_u64();
+
+        // Check for null pointer
+        if addr_u64 == 0 {
+            serial_println!("Invalid {}: null pointer", name);
+            return Err(if name.contains("stack") {
+                ProcessError::InvalidStackPointer
+            } else {
+                ProcessError::InvalidInstructionPointer
+            });
+        }
+
+        // Check alignment - stacks should be 16-byte aligned, code can be 1-byte aligned
+        if name.contains("stack") && (addr_u64 % 16) != 0 {
+            serial_println!("Invalid {}: not 16-byte aligned (0x{:x})", name, addr_u64);
+            return Err(ProcessError::InvalidStackPointer);
+        }
+
+        // Check if address is in valid range (not in kernel space for user processes)
+        if name.contains("user") && addr_u64 >= 0xFFFF800000000000 {
+            serial_println!(
+                "Invalid {}: address in kernel space (0x{:x})",
+                name,
+                addr_u64
+            );
+            return Err(if name.contains("stack") {
+                ProcessError::InvalidStackPointer
+            } else {
+                ProcessError::InvalidInstructionPointer
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Validate that a stack pointer is within reasonable bounds for the given process type
+    fn validate_stack_pointer(sp: VirtAddr, process_type: ProcessType) -> Result<(), ProcessError> {
+        let sp_u64 = sp.as_u64();
+
+        match process_type {
+            ProcessType::User => {
+                Self::validate_virtual_address(sp, "user stack pointer")?;
+
+                // User stack should be in user space (below kernel space)
+                if sp_u64 >= 0xFFFF800000000000 {
+                    serial_println!("User stack pointer in kernel space: 0x{:x}", sp_u64);
+                    return Err(ProcessError::InvalidStackPointer);
+                }
+
+                // User stack should be above 0x1000 to avoid null dereferences
+                if sp_u64 < 0x1000 {
+                    serial_println!("User stack pointer too low: 0x{:x}", sp_u64);
+                    return Err(ProcessError::InvalidStackPointer);
+                }
+            }
+            ProcessType::Kernel => {
+                Self::validate_virtual_address(sp, "kernel stack pointer")?;
+
+                // Kernel stack can be anywhere in virtual memory, but should be reasonable
+                // Check that it's not obviously invalid
+                if sp_u64 < 0x1000 {
+                    serial_println!("Kernel stack pointer too low: 0x{:x}", sp_u64);
+                    return Err(ProcessError::InvalidStackPointer);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate that an instruction pointer is reasonable for the given process type
+    fn validate_instruction_pointer(
+        ip: VirtAddr,
+        process_type: ProcessType,
+    ) -> Result<(), ProcessError> {
+        let ip_u64 = ip.as_u64();
+
+        match process_type {
+            ProcessType::User => {
+                Self::validate_virtual_address(ip, "user instruction pointer")?;
+
+                // User code should be in user space
+                if ip_u64 >= 0xFFFF800000000000 {
+                    serial_println!("User instruction pointer in kernel space: 0x{:x}", ip_u64);
+                    return Err(ProcessError::InvalidInstructionPointer);
+                }
+
+                // Should be above 0x1000 to avoid null dereferences
+                if ip_u64 < 0x1000 {
+                    serial_println!("User instruction pointer too low: 0x{:x}", ip_u64);
+                    return Err(ProcessError::InvalidInstructionPointer);
+                }
+            }
+            ProcessType::Kernel => {
+                Self::validate_virtual_address(ip, "kernel instruction pointer")?;
+
+                // Kernel code should be in kernel space or at reasonable addresses
+                if ip_u64 < 0x1000 {
+                    serial_println!("Kernel instruction pointer too low: 0x{:x}", ip_u64);
+                    return Err(ProcessError::InvalidInstructionPointer);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate that RFLAGS has reasonable values
+    fn validate_rflags(rflags: u64) -> Result<(), ProcessError> {
+        // RFLAGS bit 1 should always be set (reserved bit)
+        if (rflags & 0x2) == 0 {
+            serial_println!("Invalid RFLAGS: reserved bit 1 not set (0x{:x})", rflags);
+            return Err(ProcessError::InvalidStateTransition);
+        }
+
+        // Check that no reserved bits are set that shouldn't be
+        let reserved_mask = 0xFFC08028; // Bits that should be zero
+        if (rflags & reserved_mask) != 0 {
+            serial_println!("Invalid RFLAGS: reserved bits set (0x{:x})", rflags);
+            return Err(ProcessError::InvalidStateTransition);
+        }
+
+        Ok(())
+    }
+
+    /// Validate that a page table frame is valid
+    fn validate_page_table_frame(frame: PhysFrame<Size4KiB>) -> Result<(), ProcessError> {
+        let frame_addr = frame.start_address().as_u64();
+
+        // Check alignment
+        if (frame_addr % 4096) != 0 {
+            serial_println!("Page table frame not page-aligned: 0x{:x}", frame_addr);
+            return Err(ProcessError::OutOfMemory);
+        }
+
+        // Check that it's not null
+        if frame_addr == 0 {
+            serial_println!("Page table frame is null");
+            return Err(ProcessError::OutOfMemory);
+        }
+
+        // TODO: Check that frame is within valid physical memory range
+        // This would require access to the memory map
+
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Process {
     pub pid: u32,
@@ -54,6 +206,36 @@ pub struct Process {
 }
 
 impl Process {
+    /// Validate the process state to ensure safe context switching
+    pub fn validate(&self) -> Result<(), ProcessError> {
+        // Validate stack pointer
+        ProcessError::validate_stack_pointer(self.stack_pointer, self.process_type)?;
+
+        // Validate instruction pointer
+        ProcessError::validate_instruction_pointer(self.instruction_pointer, self.process_type)?;
+
+        // Validate page table frame for user processes
+        if self.process_type == ProcessType::User {
+            ProcessError::validate_page_table_frame(self.address_space.page_table_frame)?;
+        }
+
+        // Validate saved register state if it exists
+        if self.has_saved_state {
+            ProcessError::validate_rflags(self.registers.rflags)?;
+            ProcessError::validate_stack_pointer(
+                VirtAddr::new(self.registers.rsp),
+                self.process_type,
+            )?;
+            ProcessError::validate_instruction_pointer(
+                VirtAddr::new(self.registers.rip),
+                self.process_type,
+            )?;
+        }
+
+        serial_println!("Process {} validation passed", self.pid);
+        Ok(())
+    }
+
     pub fn cleanup_resources(&mut self) {
         // Clean up any resources associated with the process
         self.state = ProcessState::Terminated;
@@ -327,8 +509,21 @@ impl ProcessManager {
             }
         }
 
-        let stack_pointer = stack_virtual_addr + 0x1000 - 8; // Stack grows downward, point to top of stack minus 8 bytes for alignment
+        let stack_pointer = stack_virtual_addr + 0x1000 - 16; // Stack grows downward, point to top of stack minus 16 bytes for proper 16-byte alignment
         let instruction_pointer = VirtAddr::new(elf.entry); // Start at ELF entry point
+
+        // Validate the addresses before creating the process
+        if let Err(e) = ProcessError::validate_stack_pointer(stack_pointer, ProcessType::User) {
+            serial_println!("Invalid stack pointer for new process: {:?}", e);
+            return Err(e);
+        }
+
+        if let Err(e) =
+            ProcessError::validate_instruction_pointer(instruction_pointer, ProcessType::User)
+        {
+            serial_println!("Invalid instruction pointer for new process: {:?}", e);
+            return Err(e);
+        }
 
         serial_println!("Setting up process with PID {}", self.next_pid);
         serial_println!("Stack pointer will be at: {:?}", stack_pointer);
@@ -349,6 +544,12 @@ impl ProcessManager {
             },
             has_saved_state: false,
         };
+
+        // Final validation of the created process
+        if let Err(e) = process.validate() {
+            serial_println!("Created process failed validation: {:?}", e);
+            return Err(e);
+        }
 
         let pid = self.next_pid;
         // self.current_pid = pid;
@@ -376,6 +577,21 @@ impl ProcessManager {
 
         let dummy_address_space = crate::memory::ProcessAddressSpace::dummy(kernel_frame);
 
+        // Validate the addresses before creating the kernel process
+        if let Err(e) = ProcessError::validate_stack_pointer(stack_ptr, ProcessType::Kernel) {
+            serial_println!("Invalid stack pointer for new kernel process: {:?}", e);
+            return Err(e);
+        }
+
+        if let Err(e) = ProcessError::validate_instruction_pointer(entry_point, ProcessType::Kernel)
+        {
+            serial_println!(
+                "Invalid instruction pointer for new kernel process: {:?}",
+                e
+            );
+            return Err(e);
+        }
+
         let process = Process {
             pid: self.next_pid,
             state: ProcessState::Ready,
@@ -391,6 +607,12 @@ impl ProcessManager {
             },
             has_saved_state: false,
         };
+
+        // Final validation of the created kernel process
+        if let Err(e) = process.validate() {
+            serial_println!("Created kernel process failed validation: {:?}", e);
+            return Err(e);
+        }
 
         let pid = self.next_pid;
         self.processes.push(process);
@@ -481,6 +703,8 @@ lazy_static! {
 
 // Enhanced scheduling function that can save state from interrupt context
 pub fn schedule() -> ! {
+    serial_println!("Scheduling...");
+
     // Only schedule if we're not already in a critical section
     if let Some(mut pm) = PROCESS_MANAGER.try_lock() {
         if let Some(next_pid) = pm.get_next_ready_process() {
@@ -490,36 +714,53 @@ pub fn schedule() -> ! {
                 current_process.state = ProcessState::Ready;
             }
 
-            // Get and update the next process
+            // Get and validate the next process
             let mut process = {
                 let next_process = pm.get_process_mut(next_pid).unwrap();
-                next_process.state = ProcessState::Running;
 
+                // Validate the process before attempting to switch to it
+                if let Err(e) = next_process.validate() {
+                    serial_println!("Cannot schedule invalid process {}: {:?}", next_pid, e);
+                    next_process.state = ProcessState::Terminated;
+                    drop(pm);
+                    schedule(); // Try again with the next process
+                }
+
+                next_process.state = ProcessState::Running;
                 next_process.clone()
             };
 
             pm.current_pid = next_pid;
-
             drop(pm);
 
+            serial_println!("Scheduling process {} (validated)", next_pid);
             context_switch_to(&mut process);
         } else {
             // No ready processes, switch back to kernel
-            if pm.current_pid != 0 {
-                serial_println!("No ready processes, switching back to kernel");
-                unsafe {
-                    asm!("mov cr3, {}", in(reg) pm.kernel_cr3);
+            serial_println!("No ready processes, switching back to kernel");
+            unsafe {
+                // Ensure we switch to a valid kernel page table
+                let kernel_cr3 = pm.kernel_cr3;
+                if kernel_cr3 == 0 || (kernel_cr3 % 4096) != 0 {
+                    panic!("Invalid kernel CR3: 0x{:x}", kernel_cr3);
                 }
-                pm.current_pid = 0;
+                asm!("mov cr3, {}", in(reg) kernel_cr3);
+                x86_64::instructions::tlb::flush_all();
             }
+            pm.current_pid = 0;
 
-            loop {}
+            // Halt the CPU until the next interrupt
+            loop {
+                x86_64::instructions::hlt();
+            }
         }
     } else {
         // If we can't get the lock, skip this scheduling round to avoid deadlock
         serial_println!("Failed to acquire PROCESS_MANAGER lock, skipping scheduling");
 
-        loop {}
+        // Halt briefly and try again
+        x86_64::instructions::hlt();
+        schedule();
     }
 }
 
@@ -544,18 +785,44 @@ pub fn queue_user_program(
 }
 
 pub fn context_switch_to(process: &mut Process) -> ! {
-    serial_println!("Preparing to switch context to process");
+    serial_println!("Preparing to switch context to process {}", process.pid);
 
-    // Get the process and check if it's a kernel or user process
-    // process.state = ProcessState::Running;
+    // CRITICAL: Validate the process before any context switching
+    if let Err(e) = process.validate() {
+        serial_println!("Process validation failed: {:?}", e);
+        panic!("Cannot switch to invalid process - would cause page fault");
+    }
+
+    // Additional validation specific to context switching
+    match process.process_type {
+        ProcessType::User => {
+            // Ensure the address space is valid
+            if let Err(e) =
+                ProcessError::validate_page_table_frame(process.address_space.page_table_frame)
+            {
+                serial_println!("Invalid page table frame: {:?}", e);
+                panic!("Cannot switch to process with invalid page table");
+            }
+        }
+        ProcessType::Kernel => {
+            // For kernel processes, ensure we have a valid kernel CR3
+            let kernel_cr3 = x86_64::registers::control::Cr3::read()
+                .0
+                .start_address()
+                .as_u64();
+            if kernel_cr3 == 0 {
+                panic!("Kernel CR3 is invalid");
+            }
+        }
+    }
 
     match process.process_type {
         ProcessType::Kernel => {
-            serial_println!("Context switching to kernel process ");
+            serial_println!("Context switching to kernel process {}", process.pid);
             perform_kernel_context_switch(process);
         }
         ProcessType::User => {
-            serial_println!("Context switching to user process");
+            serial_println!("Context switching to user process {}", process.pid);
             let page_table_frame = process.address_space.page_table_frame;
             perform_context_switch(page_table_frame, process);
         }
@@ -657,10 +924,20 @@ fn perform_kernel_first_run(process: &mut Process) -> ! {
 }
 
 fn perform_kernel_resume(process: &mut Process) -> ! {
-    serial_println!("Restoring kernel register state: {:?}", process.registers);
+    serial_println!(
+        "Restoring kernel process {} with full register state",
+        process.pid
+    );
+    serial_println!("Register state: {:?}", process.registers);
+
+    // Validate the process before attempting to restore it
+    if let Err(e) = process.validate() {
+        serial_println!("Kernel process validation failed: {:?}", e);
+        panic!("Cannot restore invalid kernel process state");
+    }
 
     unsafe {
-        // Disable interrupts during the critical context switch section
+        // Disable interrupts during critical section
         x86_64::instructions::interrupts::disable();
 
         // Ensure we're using the kernel's page table
@@ -671,61 +948,82 @@ fn perform_kernel_resume(process: &mut Process) -> ! {
         asm!("mov cr3, {}", in(reg) kernel_cr3);
         x86_64::instructions::tlb::flush_all();
 
-        // Get kernel selectors - construct proper selector values
-        let kernel_code_sel = (crate::gdt::GDT.1.code.index() << 3) as u64; // RPL = 0 for kernel
-        let kernel_data_sel = (crate::gdt::GDT.1.data.index() << 3) as u64; // RPL = 0 for kernel
+        // Get kernel selectors - construct proper selector values (RPL = 0 for kernel)
+        let kernel_code_sel = (crate::gdt::GDT.1.code.index() << 3) as u64;
+        let kernel_data_sel = (crate::gdt::GDT.1.data.index() << 3) as u64;
 
-        // Validate and set up temporary stack area for iretq setup
-        // Ensure we have enough space and the stack is valid
-        let temp_stack = process.registers.rsp.saturating_sub(256); // Use larger offset for safety
+        // Get current stack and ensure we have enough space
+        let current_stack: u64;
+        asm!("mov {}, rsp", out(reg) current_stack);
+        let safe_temp_stack = (current_stack - 512) & !0xF; // 16-byte align and leave plenty of space
 
         asm!(
-            // Set up a temporary stack frame for iretq
+            // Switch to safe temporary stack
             "mov rsp, {temp_stack}",
-            "push {ss}",      // SS
-            "push {krsp}",    // RSP
-            "push {rflags}",  // RFLAGS
-            "push {cs}",      // CS
-            "push {rip}",     // RIP
 
-            // Set up kernel segments
+            // Set up kernel data segments
             "mov ax, {data_sel:x}",
             "mov ds, ax",
             "mov es, ax",
             "mov fs, ax",
             "mov gs, ax",
 
-            // Restore all general-purpose registers from saved state
-            "mov r15, qword ptr [{registers}]",
-            "mov r14, qword ptr [{registers} + 8]",
-            "mov r13, qword ptr [{registers} + 16]",
-            "mov r12, qword ptr [{registers} + 24]",
-            "mov r11, qword ptr [{registers} + 32]",
-            "mov r10, qword ptr [{registers} + 40]",
-            "mov r9, qword ptr [{registers} + 48]",
-            "mov r8, qword ptr [{registers} + 56]",
-            "mov rsi, qword ptr [{registers} + 64]",
-            "mov rdi, qword ptr [{registers} + 72]",
-            "mov rbp, qword ptr [{registers} + 80]",
-            "mov rdx, qword ptr [{registers} + 88]",
-            "mov rcx, qword ptr [{registers} + 96]",
-            "mov rbx, qword ptr [{registers} + 104]",
-            "mov rax, qword ptr [{registers} + 112]",
+            // Set up iretq frame for kernel mode (pushed in reverse order)
+            "push {ss}",       // SS (kernel data selector)
+            "push {krsp}",     // RSP (kernel stack pointer)
+            "push {rflags}",   // RFLAGS
+            "push {cs}",       // CS (kernel code selector)
+            "push {rip}",      // RIP (kernel instruction pointer)
 
-            // Now perform iretq to restore RIP, RSP, RFLAGS, and segments
-            // This will also re-enable interrupts if they were enabled in saved RFLAGS
-            "iretq",
-
-            temp_stack = in(reg) temp_stack,
+            temp_stack = in(reg) safe_temp_stack,
             ss = in(reg) kernel_data_sel,
             krsp = in(reg) process.registers.rsp,
             rflags = in(reg) process.registers.rflags,
             cs = in(reg) kernel_code_sel,
             rip = in(reg) process.registers.rip,
             data_sel = in(reg) kernel_data_sel as u16,
-            registers = in(reg) &process.registers as *const RegisterState,
-            options(noreturn)
         );
+
+        // Restore registers in smaller groups to avoid register pressure
+        asm!(
+            "mov r15, {r15}",
+            "mov r14, {r14}",
+            "mov r13, {r13}",
+            "mov r12, {r12}",
+            "mov r11, {r11}",
+            "mov r10, {r10}",
+            "mov r9, {r9}",
+            "mov r8, {r8}",
+            r15 = in(reg) process.registers.r15,
+            r14 = in(reg) process.registers.r14,
+            r13 = in(reg) process.registers.r13,
+            r12 = in(reg) process.registers.r12,
+            r11 = in(reg) process.registers.r11,
+            r10 = in(reg) process.registers.r10,
+            r9 = in(reg) process.registers.r9,
+            r8 = in(reg) process.registers.r8,
+        );
+
+        asm!(
+            "mov rsi, {rsi}",
+            "mov rdi, {rdi}",
+            "mov rbp, {rbp}",
+            "mov rdx, {rdx}",
+            "mov rcx, {rcx}",
+            "mov rbx, {rbx}",
+            "mov rax, {rax}",
+            rsi = in(reg) process.registers.rsi,
+            rdi = in(reg) process.registers.rdi,
+            rbp = in(reg) process.registers.rbp,
+            rdx = in(reg) process.registers.rdx,
+            rcx = in(reg) process.registers.rcx,
+            rbx = in(reg) process.registers.rbx,
+            rax = in(reg) process.registers.rax,
+        );
+
+        // Perform iretq to restore RIP, RSP, RFLAGS, and segments
+        // This will also re-enable interrupts if they were enabled in saved RFLAGS
+        asm!("iretq", options(noreturn));
     }
 }
 
@@ -733,15 +1031,41 @@ fn perform_context_switch(
     page_table_frame: x86_64::structures::paging::PhysFrame,
     process: &Process,
 ) -> ! {
-    // Get the process to switch to
-    serial_println!("Performing full context switch to process {}", process.pid);
+    serial_println!(
+        "Performing full context switch to user process {}",
+        process.pid
+    );
+
+    // Validate page table frame before switching
+    if let Err(e) = ProcessError::validate_page_table_frame(page_table_frame) {
+        serial_println!("Invalid page table frame: {:?}", e);
+        panic!("Cannot switch to process with invalid page table frame");
+    }
+
+    // Additional safety check: ensure frame address is reasonable
+    let frame_addr = page_table_frame.start_address().as_u64();
+    if frame_addr == 0 || (frame_addr % 4096) != 0 {
+        panic!("Page table frame has invalid address: 0x{:x}", frame_addr);
+    }
+
+    serial_println!(
+        "Switching to page table at physical address: 0x{:x}",
+        frame_addr
+    );
 
     // Switch to the process's page table
     unsafe {
-        asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
-    }
+        // Disable interrupts during critical page table switch
+        x86_64::instructions::interrupts::disable();
 
-    serial_println!("Switched to process page table");
+        // Switch page table
+        asm!("mov cr3, {}", in(reg) frame_addr);
+
+        // Flush TLB to ensure page table changes take effect
+        x86_64::instructions::tlb::flush_all();
+
+        serial_println!("Successfully switched to process page table");
+    }
 
     // Now actually switch to user mode and start executing the process
     switch_to_user_mode_direct(process);
@@ -749,11 +1073,6 @@ fn perform_context_switch(
 
 fn switch_to_user_mode_direct(process: &Process) -> ! {
     serial_println!("Switching to user mode for process {}", process.pid);
-    serial_println!(
-        "Entry point: {:?}, Stack: {:?}",
-        process.instruction_pointer,
-        process.stack_pointer
-    );
 
     if !process.has_saved_state {
         serial_println!(
@@ -826,36 +1145,119 @@ fn switch_to_user_mode_first_run(process: &Process) -> ! {
 }
 
 fn switch_to_user_mode_resume(process: &Process) -> ! {
-    serial_println!("Restoring register state: {:?}", process.registers);
+    serial_println!(
+        "Restoring full register state for user process {}",
+        process.pid
+    );
+    serial_println!("Register state: {:?}", process.registers);
+
+    // Validate the process before attempting to restore it
+    if let Err(e) = process.validate() {
+        serial_println!("Process validation failed: {:?}", e);
+        panic!("Cannot restore invalid process state");
+    }
 
     // Get user mode selectors from GDT - construct with RPL=3
     let user_code_sel = u64::from((crate::gdt::GDT.1.user_code.index() << 3) | 3);
     let user_data_sel = u64::from((crate::gdt::GDT.1.user_data.index() << 3) | 3);
 
     unsafe {
-        // First, set up segments
+        // Disable interrupts during critical section
+        x86_64::instructions::interrupts::disable();
+
+        // Set up user data segments first
         asm!(
-            "mov ax, {ss:x}",
+            "mov ax, {data_sel:x}",
             "mov ds, ax",
             "mov es, ax",
             "mov fs, ax",
             "mov gs, ax",
+            data_sel = in(reg) user_data_sel as u16,
+        );
 
-            "push {ss}",      // SS
-            "push {user_rsp}", // RSP
-            "push {rflags}",  // RFLAGS
-            "push {cs}",      // CS
-            "push {rip}",     // RIP
+        // Create a temporary structure on the kernel stack with all the data we need
+        // This avoids register pressure issues in the inline assembly
+        #[repr(C, packed)]
+        struct UserStateRestore {
+            r15: u64,
+            r14: u64,
+            r13: u64,
+            r12: u64,
+            r11: u64,
+            r10: u64,
+            r9: u64,
+            r8: u64,
+            rsi: u64,
+            rdi: u64,
+            rbp: u64,
+            rdx: u64,
+            rcx: u64,
+            rbx: u64,
+            rax: u64,
+            rip: u64,
+            cs: u64,
+            rflags: u64,
+            rsp: u64,
+            ss: u64,
+        }
+
+        let restore_data = UserStateRestore {
+            r15: process.registers.r15,
+            r14: process.registers.r14, 
+            r13: process.registers.r13,
+            r12: process.registers.r12,
+            r11: process.registers.r11,
+            r10: process.registers.r10,
+            r9: process.registers.r9,
+            r8: process.registers.r8,
+            rsi: process.registers.rsi,
+            rdi: process.registers.rdi,
+            rbp: process.registers.rbp,
+            rdx: process.registers.rdx,
+            rcx: process.registers.rcx,
+            rbx: process.registers.rbx,
+            rax: process.registers.rax,
+            rip: process.registers.rip,
+            cs: user_code_sel,
+            rflags: 0x202, // Force correct RFLAGS value - interrupts enabled, no other flags
+            rsp: process.registers.rsp,
+            ss: user_data_sel,
+        };        let restore_ptr = &restore_data as *const UserStateRestore;
+
+        asm!(
+            // Get the data pointer into a register
+            "mov r11, {restore_ptr}",
+
+            // Set up iretq frame first (before restoring general-purpose registers)
+            "push qword ptr [r11 + 152]", // SS
+            "push qword ptr [r11 + 144]", // RSP
+            "push qword ptr [r11 + 136]", // RFLAGS
+            "push qword ptr [r11 + 128]", // CS
+            "push qword ptr [r11 + 120]", // RIP
+
+            // Now restore all general-purpose registers
+            "mov r15, qword ptr [r11 + 0]",
+            "mov r14, qword ptr [r11 + 8]",
+            "mov r13, qword ptr [r11 + 16]",
+            "mov r12, qword ptr [r11 + 24]",
+            "mov r10, qword ptr [r11 + 40]", // restore r10 before r11
+            "mov r9, qword ptr [r11 + 48]",
+            "mov r8, qword ptr [r11 + 56]",
+            "mov rsi, qword ptr [r11 + 64]",
+            "mov rdi, qword ptr [r11 + 72]",
+            "mov rbp, qword ptr [r11 + 80]",
+            "mov rdx, qword ptr [r11 + 88]",
+            "mov rcx, qword ptr [r11 + 96]",
+            "mov rbx, qword ptr [r11 + 104]",
+            "mov rax, qword ptr [r11 + 112]",
+            "mov r11, qword ptr [r11 + 32]", // restore r11 last
+
+            // Execute iretq to switch to user mode
             "iretq",
-            ss = in(reg) user_data_sel,
-            user_rsp = in(reg) process.registers.rsp,
-            rflags = in(reg) process.registers.rflags,
-            cs = in(reg) user_code_sel,
-            rip = in(reg) process.registers.rip,
-
+            restore_ptr = in(reg) restore_ptr,
             options(noreturn)
         );
-    };
+    }
 }
 
 pub fn queue_kernel_process(entry_point: fn() -> !) {
@@ -902,16 +1304,28 @@ pub fn exit_current_process(exit_code: u8) {
             .try_lock()
             .expect("Failed to acquire PROCESS_MANAGER lock");
 
+        let current_pid = pm.current_pid;
+        if current_pid == 0 {
+            serial_println!("No current process to exit");
+            return;
+        }
+
+        // Validate kernel CR3 before switching back to it
+        let kernel_cr3 = pm.kernel_cr3;
+        if kernel_cr3 == 0 || (kernel_cr3 % 4096) != 0 {
+            panic!("Invalid kernel CR3 during process exit: 0x{:x}", kernel_cr3);
+        }
+
         // Switch back to kernel page table BEFORE any cleanup
         unsafe {
-            asm!("mov cr3, {}", in(reg) pm.kernel_cr3);
+            asm!("mov cr3, {}", in(reg) kernel_cr3);
+            x86_64::instructions::tlb::flush_all();
             serial_println!(
                 "Switched back to kernel page table (CR3: 0x{:x})",
-                pm.kernel_cr3
+                kernel_cr3
             );
         }
 
-        let current_pid = pm.current_pid;
         pm.current_pid = 0;
 
         let index = pm
@@ -938,43 +1352,111 @@ pub fn exit_current_process(exit_code: u8) {
 
 #[inline(always)]
 pub fn save_current_state(frame: &InterruptStackFrame) {
-    let mut pm = PROCESS_MANAGER
-        .try_lock()
-        .expect("Failed to acquire PROCESS_MANAGER lock");
-    let current_process = pm.get_current_process_mut();
+    // Try to acquire the lock, but don't block if we can't
+    if let Some(mut pm) = PROCESS_MANAGER.try_lock() {
+        let current_process = pm.get_current_process_mut();
 
-    if current_process.is_none() {
-        serial_println!("No current process to save state for");
-        return;
-    }
+        if current_process.is_none() {
+            serial_println!("No current process to save state for");
+            return;
+        }
 
-    let current_process = current_process.unwrap();
+        let current_process = current_process.unwrap();
 
-    current_process.has_saved_state = true;
+        // CRITICAL: Only save state if we were interrupted from user mode
+        // Check if the code segment has Ring 3 privilege (user mode)
+        let code_segment = frame.code_segment;
+        if code_segment.rpl() != x86_64::PrivilegeLevel::Ring3 {
+            serial_println!(
+                "Skipping state save - interrupted from kernel mode (RPL={})",
+                code_segment.rpl() as u8
+            );
+            return;
+        }
 
-    unsafe {
-        asm!(
-            "mov qword ptr [{0}], r15",
-            "mov qword ptr [{0} + 8], r14",
-            "mov qword ptr [{0} + 16], r13",
-            "mov qword ptr [{0} + 24], r12",
-            "mov qword ptr [{0} + 32], r11",
-            "mov qword ptr [{0} + 40], r10",
-            "mov qword ptr [{0} + 48], r9",
-            "mov qword ptr [{0} + 56], r8",
-            "mov qword ptr [{0} + 64], rsi",
-            "mov qword ptr [{0} + 72], rdi",
-            "mov qword ptr [{0} + 80], rbp",
-            "mov qword ptr [{0} + 88], rdx",
-            "mov qword ptr [{0} + 96], rcx",
-            "mov qword ptr [{0} + 104], rbx",
-            "mov qword ptr [{0} + 112], rax",
-            in(reg) &mut current_process.registers as *mut RegisterState,
-            options(nostack, preserves_flags)
+        // Also check if we're in user process's address space by validating the IP
+        let frame_ip = frame.instruction_pointer.as_u64();
+        if frame_ip >= 0xFFFF800000000000 {
+            serial_println!(
+                "Skipping state save - instruction pointer in kernel space (0x{:x})",
+                frame_ip
+            );
+            return;
+        }
+
+        // Validate the interrupt frame before saving
+        let frame_sp = frame.stack_pointer.as_u64();
+        let frame_flags = frame.cpu_flags.bits();
+
+        // Basic validation of frame contents
+        if frame_ip == 0 {
+            serial_println!("Warning: saving state with null instruction pointer");
+            return;
+        }
+
+        if frame_sp == 0 {
+            serial_println!("Warning: saving state with null stack pointer");
+            return;
+        }
+
+        // Validate that we're saving reasonable user-space addresses
+        if frame_sp >= 0xFFFF800000000000 {
+            serial_println!(
+                "Skipping state save - stack pointer in kernel space (0x{:x})",
+                frame_sp
+            );
+            return;
+        }
+
+        // Validate RFLAGS from interrupt frame
+        if let Err(e) = ProcessError::validate_rflags(frame_flags) {
+            serial_println!("Warning: invalid RFLAGS in interrupt frame: {:?}", e);
+            // Continue anyway, but with corrected RFLAGS
+        }
+
+        current_process.has_saved_state = true;
+
+        // Save general-purpose registers using inline assembly
+        // This must be done very carefully to preserve the exact state
+        unsafe {
+            asm!(
+                // Save all general-purpose registers to the RegisterState struct
+                "mov qword ptr [{reg_base}], r15",      // offset 0
+                "mov qword ptr [{reg_base} + 8], r14",  // offset 8
+                "mov qword ptr [{reg_base} + 16], r13", // offset 16
+                "mov qword ptr [{reg_base} + 24], r12", // offset 24
+                "mov qword ptr [{reg_base} + 32], r11", // offset 32
+                "mov qword ptr [{reg_base} + 40], r10", // offset 40
+                "mov qword ptr [{reg_base} + 48], r9",  // offset 48
+                "mov qword ptr [{reg_base} + 56], r8",  // offset 56
+                "mov qword ptr [{reg_base} + 64], rsi", // offset 64
+                "mov qword ptr [{reg_base} + 72], rdi", // offset 72
+                "mov qword ptr [{reg_base} + 80], rbp", // offset 80
+                "mov qword ptr [{reg_base} + 88], rdx", // offset 88
+                "mov qword ptr [{reg_base} + 96], rcx", // offset 96
+                "mov qword ptr [{reg_base} + 104], rbx",// offset 104
+                "mov qword ptr [{reg_base} + 112], rax",// offset 112
+                reg_base = in(reg) &mut current_process.registers as *mut RegisterState,
+                options(nostack, preserves_flags)
+            );
+        }
+
+        // Save the interrupt frame information
+        current_process.registers.rip = frame_ip;
+        current_process.registers.rflags = frame_flags;
+        current_process.registers.rsp = frame_sp;
+
+        // Update the process's stack and instruction pointers for consistency
+        current_process.stack_pointer = VirtAddr::new(frame_sp);
+        current_process.instruction_pointer = VirtAddr::new(frame_ip);
+
+        serial_println!(
+            "Saved state for process {} - IP: 0x{:x}, SP: 0x{:x} (FROM USER MODE)",
+            current_process.pid,
+            frame_ip,
+            frame_sp
         );
+    } else {
+        serial_println!("Could not acquire PROCESS_MANAGER lock for state saving");
     }
-
-    current_process.registers.rip = frame.instruction_pointer.as_u64();
-    current_process.registers.rflags = frame.cpu_flags.bits();
-    current_process.registers.rsp = frame.stack_pointer.as_u64();
 }

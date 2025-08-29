@@ -1,17 +1,22 @@
 #![no_std]
 #![no_main]
 
+fn fib(n: u64) -> u64 {
+    if n == 0 {
+        0
+    } else if n == 1 {
+        1
+    } else {
+        fib(n - 1) + fib(n - 2)
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
-    // Simple exit syscall - just exit with code 42
     unsafe {
-        core::arch::asm!(
-            "mov rax, 60", // syscall number for exit
-            "mov rdi, 42", // exit code
-            "syscall",     // use int 0x80 instead of syscall instruction
-            options(noreturn)
-        );
+        core::arch::asm!("mov rax, 1", "mov rdi, 1", "syscall",);
     }
+    loop {}
 }
 
 #[panic_handler]

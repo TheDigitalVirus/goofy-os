@@ -116,10 +116,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     init_scancode_queue();
 
-    let example_entry = kernel::kernel_processes::example::entry_point;
-    let keyboard_entry = kernel::kernel_processes::keyboard::print_keypresses;
-    queue_kernel_process(example_entry);
-    queue_kernel_process(keyboard_entry);
+    // let example_entry = kernel::kernel_processes::example::entry_point;
+    // let keyboard_entry = kernel::kernel_processes::keyboard::print_keypresses;
+    // queue_kernel_process(example_entry);
+    // queue_kernel_process(keyboard_entry);
 
     let program = include_bytes!("../test.elf");
 

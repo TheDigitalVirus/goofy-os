@@ -265,7 +265,7 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
 
     serial_println!("About to return from syscall...");
 
-    result
+    crate::process::schedule();
 }
 
 fn handle_syscall(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {

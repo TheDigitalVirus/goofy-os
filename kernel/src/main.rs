@@ -14,11 +14,17 @@ use kernel::apic;
 use kernel::interrupts as kernel_interrupts;
 use kernel::sysinfo::{STACK_BASE, get_stack_pointer};
 use kernel::{desktop::main::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
+use kernel::{gdt::GDT, interrupts::syscall_handler_asm};
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 use kernel::{allocator, memory};
 use x86_64::VirtAddr;
 use x86_64::instructions::interrupts;
+use x86_64::registers::{
+    control::{Efer, EferFlags},
+    model_specific::{LStar, SFMask, Star},
+    rflags::RFlags,
+};
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
@@ -36,6 +42,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let frame = boot_info.framebuffer.as_mut().unwrap();
     kernel::framebuffer::init(frame);
 
+    // Enable syscalls
+    unsafe {
+        Efer::update(|e| *e |= EferFlags::SYSTEM_CALL_EXTENSIONS);
+        LStar::write(VirtAddr::new(syscall_handler_asm as u64));
+        SFMask::write(RFlags::INTERRUPT_FLAG);
+
+        match Star::write(GDT.1.user_code, GDT.1.user_data, GDT.1.code, GDT.1.data) {
+            Ok(()) => serial_println!("Star MSRs written successfully"),
+            Err(e) => panic!("Failed to write Star MSRs: {}", e),
+        }
+    }
+
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
 
     // Initialize the OS
@@ -45,6 +63,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let mut frame_allocator = unsafe { BootInfoFrameAllocator::init(&boot_info.memory_regions) };
 
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
+
+    let program = include_bytes!("../test.elf");
+
+    match kernel::process::queue_user_program(program, &mut frame_allocator, phys_mem_offset) {
+        Ok(pid) => serial_println!("Successfully queued process with PID: {}", pid),
+        Err(e) => serial_println!("Failed to queue process: {:?}", e),
+    }
 
     #[cfg(uefi)]
     {

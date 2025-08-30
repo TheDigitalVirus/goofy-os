@@ -24,6 +24,7 @@ pub mod fs;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;
+pub mod process;
 pub mod serial;
 pub mod surface;
 pub mod sysinfo;

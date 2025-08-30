@@ -180,6 +180,8 @@ impl ProcessAddressSpace {
             mapper
                 .map_to(page, frame, final_flags, frame_allocator)?
                 .flush();
+
+            // Check what the page table entry actually contains after mapping
         }
         Ok(())
     }

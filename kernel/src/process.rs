@@ -8,7 +8,7 @@ use x86_64::{
     instructions::interrupts::without_interrupts,
     structures::{
         idt::InterruptStackFrame,
-        paging::{FrameAllocator, PageTableFlags, PhysFrame, Size4KiB},
+        paging::{FrameAllocator, PageTableFlags, PhysFrame, Size4KiB, mapper::MapToError},
     },
 };
 
@@ -419,9 +419,9 @@ impl ProcessManager {
                         segment_flags,
                         frame_allocator,
                     )
-                    .map_err(|e| {
-                        let error_string = alloc::format!("{:?}", e);
-                        if error_string.contains("PageAlreadyMapped") {
+                    .map_err(|e| match e {
+                        MapToError::PageAlreadyMapped(phys_frame) => {
+                            // TODO: Must have been high here, add custom error
                             // This is OK - segments can overlap at page boundaries
                             serial_println!(
                                 "Page 0x{:x} already mapped, continuing (segment {} page {})",
@@ -429,22 +429,36 @@ impl ProcessManager {
                                 i,
                                 page_idx
                             );
-                            return ProcessError::InvalidProgram; // Use a different error to handle this case
+
+                            Ok(phys_frame)
                         }
-                        serial_println!("Failed to map segment {} page {}: {:?}", i, page_idx, e);
-                        ProcessError::OutOfMemory
+                        e => {
+                            serial_println!(
+                                "Failed to map segment {} page {}: {:?}",
+                                i,
+                                page_idx,
+                                e
+                            );
+
+                            Err(ProcessError::OutOfMemory)
+                        }
                     });
 
                 // Handle the special case where the page was already mapped
-                if let Err(ProcessError::InvalidProgram) = mapping_result {
-                    // Page already mapped, skip mapping but continue with data copying
-                    serial_println!(
-                        "Skipping mapping for already mapped page, continuing with segment {}",
-                        i
-                    );
-                } else {
-                    // Check for other errors
-                    mapping_result?;
+                if let Err(err) = mapping_result {
+                    match err {
+                        Ok(_phys_frame) => {
+                            // Page already mapped, skip mapping but continue with data copying
+                            serial_println!(
+                                "Skipping mapping for already mapped page, continuing with segment {}",
+                                i
+                            );
+                        }
+                        Err(err) => {
+                            // Some other error occurred
+                            return Err(err);
+                        }
+                    }
                 }
 
                 // Copy segment data to this page if needed

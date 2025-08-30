@@ -4,6 +4,7 @@ use crate::{hlt_loop, print, println, process::save_current_state, serial_printl
 use core::{arch::asm, u64};
 
 use lazy_static::lazy_static;
+#[cfg(not(uefi))]
 use pic8259::ChainedPics;
 use ps2_mouse::{Mouse, MouseState};
 use spin::{self, lazy::Lazy};
@@ -22,7 +23,7 @@ pub const MOUSE_INTERRUPT: u8 = PIC_1_OFFSET + 12;
 
 const PROCESS_EXITED: u64 = u64::MAX;
 
-// TODO: Don't do this when config::LEGACY_PIC_ENABLED is false
+#[cfg(not(uefi))]
 pub static PICS: spin::Mutex<ChainedPics> =
     spin::Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
 
@@ -251,7 +252,8 @@ pub fn syscall_handler_asm() {
             options(noreturn)
         );
     }
-} // TODO Debug version to figure out correct register values
+}
+
 extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64) -> u64 {
     serial_println!("=== SYSCALL START ===");
     serial_println!("Syscall handler (Rust) called");

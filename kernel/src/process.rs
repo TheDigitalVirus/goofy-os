@@ -412,7 +412,7 @@ impl ProcessManager {
                     ProcessError::OutOfMemory
                 })?;
 
-                address_space
+                let mapping_result = address_space
                     .map_user_memory(
                         page_virtual_addr,
                         page_frame.start_address(),
@@ -421,9 +421,32 @@ impl ProcessManager {
                         frame_allocator,
                     )
                     .map_err(|e| {
+                        let error_string = alloc::format!("{:?}", e);
+                        if error_string.contains("PageAlreadyMapped") {
+                            // This is OK - segments can overlap at page boundaries
+                            serial_println!(
+                                "Page 0x{:x} already mapped, continuing (segment {} page {})",
+                                page_virtual_addr.as_u64(),
+                                i,
+                                page_idx
+                            );
+                            return ProcessError::InvalidProgram; // Use a different error to handle this case
+                        }
                         serial_println!("Failed to map segment {} page {}: {:?}", i, page_idx, e);
                         ProcessError::OutOfMemory
-                    })?;
+                    });
+
+                // Handle the special case where the page was already mapped
+                if let Err(ProcessError::InvalidProgram) = mapping_result {
+                    // Page already mapped, skip mapping but continue with data copying
+                    serial_println!(
+                        "Skipping mapping for already mapped page, continuing with segment {}",
+                        i
+                    );
+                } else {
+                    // Check for other errors
+                    mapping_result?;
+                }
 
                 // Copy segment data to this page if needed
                 let page_offset = page_idx * 4096;
@@ -1145,11 +1168,11 @@ fn switch_to_user_mode_first_run(process: &Process) -> ! {
 }
 
 fn switch_to_user_mode_resume(process: &Process) -> ! {
-    serial_println!(
-        "Restoring full register state for user process {}",
-        process.pid
-    );
-    serial_println!("Register state: {:?}", process.registers);
+    // serial_println!(
+    //     "Restoring full register state for user process {}",
+    //     process.pid
+    // );
+    // serial_println!("Register state: {:?}", process.registers);
 
     // Validate the process before attempting to restore it
     if let Err(e) = process.validate() {
@@ -1203,7 +1226,7 @@ fn switch_to_user_mode_resume(process: &Process) -> ! {
 
         let restore_data = UserStateRestore {
             r15: process.registers.r15,
-            r14: process.registers.r14, 
+            r14: process.registers.r14,
             r13: process.registers.r13,
             r12: process.registers.r12,
             r11: process.registers.r11,
@@ -1219,10 +1242,11 @@ fn switch_to_user_mode_resume(process: &Process) -> ! {
             rax: process.registers.rax,
             rip: process.registers.rip,
             cs: user_code_sel,
-            rflags: 0x202, // Force correct RFLAGS value - interrupts enabled, no other flags
+            rflags: process.registers.rflags,
             rsp: process.registers.rsp,
             ss: user_data_sel,
-        };        let restore_ptr = &restore_data as *const UserStateRestore;
+        };
+        let restore_ptr = &restore_data as *const UserStateRestore;
 
         asm!(
             // Get the data pointer into a register

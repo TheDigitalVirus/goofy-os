@@ -185,57 +185,72 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
 pub fn syscall_handler_asm() {
     unsafe {
         asm!(
-            // Save registers (don't save RCX and R11 - syscall uses these for return)
-                    "push rax",
-                    "push rbx",
-                    "push rdx",
-                    "push rsi",
-                    "push rdi",
-                    "push rbp",
-                    "push r8",
-                    "push r9",
-                    "push r10",
+            // CRITICAL: Save RCX and R11 first - they contain return address and RFLAGS
+            "push rcx",      // Return RIP (set by syscall instruction)
+            "push r11",      // Saved RFLAGS (set by syscall instruction)
 
-                    // Set up arguments for Rust function
-                    // rax = syscall number (already in rax)
-                    // rdi = arg1 (already in rdi)
-                    // rsi = arg2 (already in rsi)
-                    // rdx = arg3 (already in rdx)
-                    // So we need to move them to the right positions:
-                    "mov r8, rdx",   // Save rdx (arg3)
-                    "mov r9, rsi",   // Save rsi (arg2)
-                    "mov r10, rdi",  // Save rdi (arg1)
-                    "mov rdi, rax",  // syscall number -> first arg
-                    "mov rsi, r10",  // arg1 -> second arg
-                    "mov rdx, r9",   // arg2 -> third arg
-                    "mov rcx, r8",   // arg3 -> fourth arg
+            // Save other caller-saved registers
+            "push rax",      // syscall number
+            "push rbx",
+            "push rdx",      // arg3
+            "push rsi",      // arg2
+            "push rdi",      // arg1
+            "push rbp",
+            "push r8",
+            "push r9",
+            "push r10",
+            "push r12",
+            "push r13",
+            "push r14",
+            "push r15",
 
-                    "call {}",
+            // Prepare arguments for Rust function in proper order
+            // C calling convention: RDI, RSI, RDX, RCX, R8, R9
+            // We want: syscall_handler_rust_debug(rax, rdi, rsi, rdx)
+            // Use the stack to preserve the original values temporarily
+            "push rdx",      // Save original rdx (arg3) temporarily
+            "push rsi",      // Save original rsi (arg2) temporarily
+            "push rdi",      // Save original rdi (arg1) temporarily
+            "push rax",      // Save original rax (syscall number) temporarily
 
-                    // Restore registers
-                    "pop r10",
-                    "pop r9",
-                    "pop r8",
-                    "pop rbp",
-                    "pop rdi",
-                    "pop rsi",
-                    "pop rdx",
-                    "pop rbx",
-                    // Don't pop rax - it contains the return value
+            // Set up arguments in C calling convention order (from stack)
+            "pop rdi",       // 1st arg: syscall number (was in rax)
+            "pop rsi",       // 2nd arg: arg1 (was in rdi)
+            "pop rdx",       // 3rd arg: arg2 (was in rsi)
+            "pop rcx",       // 4th arg: arg3 (was in rdx)
 
-                    // RCX and R11 are already set by syscall instruction
-                    // RCX = return RIP, R11 = RFLAGS
-                    // Return to user mode
-                    "sysretq",
+            "call {}",       // Call the Rust handler
+
+            // The argument preparation above used 4 pushes/pops that balanced out
+            // Now restore all saved registers in reverse order
+            "pop r15",
+            "pop r14",
+            "pop r13",
+            "pop r12",
+            "pop r10",
+            "pop r9",
+            "pop r8",
+            "pop rbp",
+            "pop rdi",       // Original rdi
+            "pop rsi",       // Original rsi
+            "pop rdx",       // Original rdx
+            "pop rbx",
+            "add rsp, 8",    // Skip rax (it contains the return value, don't restore it)
+
+            // CRITICAL: Restore RCX and R11 for sysretq
+            "pop r11",       // Restore RFLAGS
+            "pop rcx",       // Restore return RIP
+
+            // Return to user mode - sysretq uses RCX (return RIP) and R11 (RFLAGS)
+            "sysretq",
 
             sym syscall_handler_rust_debug,
             options(noreturn)
         );
     }
-}
-
-// TODO Debug version to figure out correct register values
+} // TODO Debug version to figure out correct register values
 extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64) -> u64 {
+    serial_println!("=== SYSCALL START ===");
     serial_println!("Syscall handler (Rust) called");
     serial_println!(
         "Syscall: rax={}, rdi={}, rsi=0x{:x}, rdx={}",
@@ -264,8 +279,90 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
     }
 
     serial_println!("About to return from syscall...");
+    serial_println!("=== SYSCALL END ===");
 
-    crate::process::schedule();
+    // DO NOT call schedule() here! The syscall should return directly to user mode
+    // Calling schedule() here causes register corruption and double faults
+    // The sysretq instruction in the assembly handler will return to user mode correctly
+
+    result // Return the syscall result to the assembly handler
+}
+
+// Minimal syscall handler for testing
+pub fn syscall_handler_asm_minimal() {
+    unsafe {
+        asm!(
+            // Minimal syscall handler - syscall instruction already saved RCX=RIP, R11=RFLAGS
+            // CRITICAL: Save RCX (return address) and R11 (RFLAGS) first!
+
+            "push rcx",      // Save return address (MOST IMPORTANT!)
+            "push r11",      // Save RFLAGS
+
+            // Check if stack needs alignment (should be 0 after push operations)
+            // Use r12 instead of r11 to avoid conflict with RFLAGS
+            "mov r12, rsp",
+            "and r12, 0xF",  // Check last 4 bits
+            "sub rsp, r12",  // Subtract to align (0 if already aligned)
+            "push r12",      // Save the alignment offset
+
+            "push rax",      // syscall number
+            "push rdi",      // arg1
+            "push rsi",      // arg2
+            "push rdx",      // arg3
+            "push r8",       // Preserve a few more registers for safety
+            "push r9",
+            "push r10",
+
+            // Arguments are already in the right registers for Rust function call
+            // rdi=rax (syscall number), rsi=rdi (arg1), rdx=rsi (arg2), rcx=rdx (arg3)
+            "mov rcx, rdx",  // Move arg3 to 4th parameter position
+            "mov rdx, rsi",  // Move arg2 to 3rd parameter position
+            "mov rsi, rdi",  // Move arg1 to 2nd parameter position
+            "mov rdi, rax",  // Move syscall number to 1st parameter position
+
+            "call {}",       // Call minimal Rust handler
+
+            // Restore in reverse order
+            "pop r10",
+            "pop r9",
+            "pop r8",
+            "pop rdx",       // Original arg3
+            "pop rsi",       // Original arg2
+            "pop rdi",       // Original arg1
+            // Don't restore rax - it contains the return value
+            "add rsp, 8",    // Skip the saved rax
+
+            // Restore stack alignment
+            "pop r12",       // Get alignment offset
+            "add rsp, r12",  // Restore original alignment
+
+            "pop r11",       // Restore RFLAGS
+            "pop rcx",       // Restore return address
+
+            // Return to user space - RCX and R11 now have correct values
+            "sysretq",            sym syscall_handler_rust_minimal,
+            options(noreturn)
+        );
+    }
+} // Minimal Rust handler
+extern "C" fn syscall_handler_rust_minimal(rax: u64, rdi: u64, rsi: u64, rdx: u64) -> u64 {
+    serial_println!("=== MINIMAL SYSCALL ===");
+    serial_println!("Syscall {}: args({}, 0x{:x}, {})", rax, rdi, rsi, rdx);
+
+    let result = match rax {
+        1 => {
+            // sys_write - just return 0 for now to keep it simple
+            serial_println!("sys_write (minimal) -> 0");
+            0
+        }
+        _ => {
+            serial_println!("Unknown syscall -> MAX");
+            u64::MAX
+        }
+    };
+
+    serial_println!("=== MINIMAL SYSCALL DONE ===");
+    result
 }
 
 fn handle_syscall(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
@@ -287,20 +384,34 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
         count
     );
 
-    print!(
-        "sys_write called: fd={}, buf_ptr=0x{:x}, count={}",
-        fd, buf_ptr, count
-    );
-
-    if fd == 1 {
-        // stdout
-        // For now, just print that we got a write syscall
-        serial_println!("Write to stdout: {} bytes", count);
-        count // Return number of bytes "written"
-    } else {
+    // Validate parameters to prevent issues with garbage values
+    if fd != 1 {
         serial_println!("Write to unsupported fd: {}", fd);
-        0
+        return 0;
     }
+
+    // Sanity check on count - prevent huge garbage values
+    if count > 1024 * 1024 {
+        // More than 1MB is suspicious
+        serial_println!("Write count too large ({}), treating as 0", count);
+        return 0;
+    }
+
+    // Validate buffer pointer for user space
+    if buf_ptr == 0 {
+        serial_println!("Write with null buffer pointer");
+        return 0;
+    }
+
+    if buf_ptr >= 0xFFFF800000000000 {
+        serial_println!("Write with kernel space buffer pointer: 0x{:x}", buf_ptr);
+        return 0;
+    }
+
+    // stdout - for now just acknowledge the write without actually reading the buffer
+    // (since we'd need to properly map user memory to read it)
+    serial_println!("Write to stdout: {} bytes", count);
+    count // Return number of bytes "written"
 }
 
 fn sys_exit(exit_code: u64) -> u64 {

@@ -14,7 +14,7 @@ use kernel::{
     graphics::{
         draw_circle, draw_circle_outline, draw_line, draw_rect, draw_rect_outline, set_pixel,
     },
-    interrupts::syscall_handler_asm,
+    interrupts::{syscall_handler_asm, syscall_handler_asm_minimal},
     kernel_processes::keyboard::init_scancode_queue,
     memory::BootInfoFrameAllocator,
     println,

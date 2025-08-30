@@ -187,7 +187,6 @@ impl ProcessAddressSpace {
     }
 
     pub fn cleanup(&mut self) {
-        // Here we would clean up the address space, but for now we just print a message
         serial_println!(
             "Cleaning up address space for page table frame: {:?}",
             self.page_table_frame.start_address()
@@ -198,20 +197,10 @@ impl ProcessAddressSpace {
             self.physical_memory_offset + self.page_table_frame.start_address().as_u64();
         let page_table_ptr: *mut PageTable = page_table_virt.as_mut_ptr();
 
-        serial_println!(
-            "Zeroing out page table at virtual address: {:?}",
-            page_table_virt
-        );
-
         unsafe {
             let page_table_ref = &mut *page_table_ptr;
             page_table_ref.zero();
         }
-
-        serial_println!(
-            "Address space cleanup complete for page table frame: {:?}",
-            self.page_table_frame.start_address()
-        );
     }
 
     /// Create a dummy ProcessAddressSpace for kernel processes

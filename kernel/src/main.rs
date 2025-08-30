@@ -9,27 +9,21 @@ use core::panic::PanicInfo;
 extern crate alloc;
 
 use bootloader_api::{BootInfo, entry_point};
-use kernel::{
-    gdt::GDT,
-    graphics::{
-        draw_circle, draw_circle_outline, draw_line, draw_rect, draw_rect_outline, set_pixel,
-    },
-    interrupts::{syscall_handler_asm, syscall_handler_asm_minimal},
-    kernel_processes::keyboard::init_scancode_queue,
-    memory::BootInfoFrameAllocator,
-    println,
-    process::queue_kernel_process,
-    serial_println,
-};
+#[cfg(uefi)]
+use kernel::apic;
+use kernel::interrupts as kernel_interrupts;
+use kernel::sysinfo::{STACK_BASE, get_stack_pointer};
+use kernel::{desktop::main::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
+use kernel::{gdt::GDT, interrupts::syscall_handler_asm};
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
-use x86_64::{
-    instructions::interrupts,
-    registers::{
-        control::{Efer, EferFlags},
-        model_specific::{LStar, SFMask, Star},
-        rflags::RFlags,
-    },
+use kernel::{allocator, memory};
+use x86_64::VirtAddr;
+use x86_64::instructions::interrupts;
+use x86_64::registers::{
+    control::{Efer, EferFlags},
+    model_specific::{LStar, SFMask, Star},
+    rflags::RFlags,
 };
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
@@ -41,13 +35,10 @@ pub static BOOTLOADER_CONFIG: BootloaderConfig = {
 entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
-    use kernel::{allocator, memory};
-    use x86_64::VirtAddr;
+    unsafe { STACK_BASE = get_stack_pointer() as usize };
 
     serial_println!("Booting goofy OS...");
-    serial_println!("Bootloader information: {:#?}", boot_info);
 
-    serial_println!("Initializing framebuffer");
     let frame = boot_info.framebuffer.as_mut().unwrap();
     kernel::framebuffer::init(frame);
 
@@ -63,51 +54,36 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
-    set_pixel(10, 10, kernel::framebuffer::Color::new(255, 0, 0));
-    draw_line(
-        (100, 100),
-        (50, 50),
-        kernel::framebuffer::Color::new(0, 255, 0),
-    );
-    draw_rect(
-        (200, 200),
-        (300, 300),
-        kernel::framebuffer::Color::new(0, 0, 255),
-    );
-    draw_rect_outline(
-        (400, 400),
-        (500, 500),
-        kernel::framebuffer::Color::new(255, 255, 0),
-    );
-    draw_circle((600, 600), 50, kernel::framebuffer::Color::new(255, 0, 255));
-    draw_circle_outline((700, 600), 75, kernel::framebuffer::Color::new(0, 255, 255));
-
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
 
     // Initialize the OS
     kernel::init(phys_mem_offset);
 
-    serial_println!("Kernel initialized, setting up memory...");
-    println!("Kernel initialized successfully!");
-
-    serial_println!("Physical memory offset: {:?}", phys_mem_offset);
-
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
-
-    serial_println!("Memory mapper initialized successfully!");
-
     let mut frame_allocator = unsafe { BootInfoFrameAllocator::init(&boot_info.memory_regions) };
-
-    serial_println!("Frame allocator initialized successfully!");
 
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
 
-    serial_println!("Heap initialized successfully!");
+    let program = include_bytes!("../test.elf");
 
-    println!("Hello World{}", "!");
+    match kernel::process::queue_user_program(program, &mut frame_allocator, phys_mem_offset) {
+        Ok(pid) => serial_println!("Successfully queued process with PID: {}", pid),
+        Err(e) => serial_println!("Failed to queue process: {:?}", e),
+    }
 
-    // Initialize the global executor
-    // kernel::task::executor::init_global_executor();
+    #[cfg(uefi)]
+    {
+        unsafe {
+            apic::init(
+                *boot_info.rsdp_addr.as_ref().unwrap() as usize,
+                phys_mem_offset,
+                &mut mapper,
+                &mut frame_allocator,
+            )
+        };
+    };
+
+    kernel_interrupts::init_mouse();
 
     // Some tests for the heap allocator
     let heap_value = alloc::boxed::Box::new(41);
@@ -118,35 +94,26 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let heap_string = alloc::string::String::from("Hello from the heap!");
     println!("heap_string at {:p}", heap_string.as_ptr());
 
-    init_scancode_queue();
+    #[cfg(test)]
+    test_main();
 
-    // let example_entry = kernel::kernel_processes::example::entry_point;
-    // let keyboard_entry = kernel::kernel_processes::keyboard::print_keypresses;
-    // queue_kernel_process(example_entry);
-    // queue_kernel_process(keyboard_entry);
+    interrupts::enable();
 
-    let program = include_bytes!("../test.elf");
-
-    match kernel::process::queue_user_program(program, &mut frame_allocator, phys_mem_offset) {
-        Ok(pid) => serial_println!("Successfully queued process with PID: {}", pid),
-        Err(e) => serial_println!("Failed to queue process: {:?}", e),
+    match kernel::fs::manager::init_filesystem() {
+        Ok(_) => {
+            serial_println!("Filesystem initialized successfully!");
+            println!("Filesystem ready!");
+        }
+        Err(e) => {
+            serial_println!("Failed to initialize filesystem: {}", e);
+            println!("Filesystem initialization failed: {}", e);
+        }
     }
 
     #[cfg(test)]
     test_main();
 
-    // {
-    //     use kernel::process::PROCESS_MANAGER;
-
-    //     let mut pm = PROCESS_MANAGER.lock();
-    //     let pid = 1;
-
-    //     pm.set_current_pid(pid);
-    // }
-
-    // The kernel should continue running and let the scheduler handle task execution
-    interrupts::enable();
-    kernel::hlt_loop();
+    run_desktop();
 }
 
 #[cfg(not(test))]

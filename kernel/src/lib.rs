@@ -4,6 +4,7 @@
 #![feature(custom_test_frameworks)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
+#![feature(const_slice_make_iter)]
 
 #[cfg(test)]
 use bootloader_api::{BootInfo, entry_point};
@@ -15,20 +16,21 @@ use exit::{QemuExitCode, exit_qemu};
 extern crate alloc;
 
 pub mod allocator;
+pub mod apic;
+pub mod desktop;
 pub mod exit;
 pub mod framebuffer;
+pub mod fs;
 pub mod gdt;
-pub mod graphics;
 pub mod interrupts;
-pub mod kernel_processes;
 pub mod memory;
 pub mod process;
 pub mod serial;
-pub mod task;
+pub mod surface;
+pub mod sysinfo;
+pub mod time;
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
-
-use crate::{interrupts::init_mouse, kernel_processes::keyboard::init_scancode_queue};
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
@@ -42,19 +44,16 @@ pub fn init(physical_memory_offset: x86_64::VirtAddr) {
     // Initialize the physical memory offset
     PHYSICAL_MEMORY_OFFSET.init_once(|| physical_memory_offset);
 
-    serial_println!("Initializing interrupts...");
     interrupts::init_idt();
-    serial_println!("Initializing GDT...");
     gdt::init();
-    serial_println!("Initializing mouse input...");
-    init_mouse();
-    serial_println!("Initializing PICs...");
-    unsafe { interrupts::PICS.lock().initialize() };
-    serial_println!("Enabling interrupts...");
+
+    #[cfg(not(uefi))]
+    unsafe {
+        interrupts::PICS.lock().initialize()
+    };
 
     // Disable interrupts to prevent switching to processes before they are initialized
     x86_64::instructions::interrupts::disable();
-    serial_println!("Done!");
 }
 
 pub fn hlt_loop() -> ! {

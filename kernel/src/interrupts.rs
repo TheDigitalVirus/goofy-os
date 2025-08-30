@@ -1,15 +1,15 @@
+#[cfg(uefi)]
+use crate::apic;
 use crate::{hlt_loop, print, println, process::save_current_state, serial_println};
-use core::arch::asm;
+use core::{arch::asm, u64};
+
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use ps2_mouse::{Mouse, MouseState};
 use spin::{self, lazy::Lazy};
 use spinning_top::Spinlock;
 use x86_64::{
-    instructions::{
-        interrupts::{disable, enable, without_interrupts},
-        port::PortReadOnly,
-    },
+    instructions::{interrupts, port::PortReadOnly},
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
 };
 
@@ -17,12 +17,12 @@ pub static MOUSE: Lazy<Spinlock<Mouse>> = Lazy::new(|| Spinlock::new(Mouse::new(
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
-pub const SYSCALL_INTERRUPT: u8 = 0x80;
 pub const KEYBOARD_INTERRUPT: u8 = PIC_1_OFFSET + 1;
 pub const MOUSE_INTERRUPT: u8 = PIC_1_OFFSET + 12;
 
-const PROCESS_EXITED: u64 = u64::MAX; // Special value to indicate process exit
+const PROCESS_EXITED: u64 = u64::MAX;
 
+// TODO: Don't do this when config::LEGACY_PIC_ENABLED is false
 pub static PICS: spin::Mutex<ChainedPics> =
     spin::Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
 
@@ -56,15 +56,6 @@ lazy_static! {
         idt[InterruptIndex::Keyboard.as_u8()].set_handler_fn(keyboard_interrupt_handler);
         idt[InterruptIndex::Mouse.as_u8()].set_handler_fn(mouse_interrupt_handler);
 
-        // Set up syscall handler with DPL 3 to allow user mode access
-        // Use a custom gate instead of the x86-interrupt attribute
-        unsafe {
-            let syscall_entry = syscall_handler_asm as *const () as u64;
-            idt[SYSCALL_INTERRUPT]
-                .set_handler_addr(x86_64::VirtAddr::new(syscall_entry))
-                .set_privilege_level(x86_64::PrivilegeLevel::Ring3);
-        }
-
         idt.general_protection_fault.set_handler_fn(general_protection_fault_handler);
         // idt.security_exception
         //     .set_handler_fn(general_protection_fault_handler);
@@ -84,7 +75,7 @@ pub fn init_mouse() {
 
 // This will be fired when a packet is finished being processed.
 fn on_complete(mouse_state: MouseState) {
-    crate::task::mouse::add_mouse_state(mouse_state);
+    crate::desktop::input::add_mouse_state(mouse_state);
 }
 
 // An example interrupt based on https://os.phil-opp.com/hardware-interrupts/. The ps2 mouse is configured to fire
@@ -95,14 +86,18 @@ extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFr
 
     // I know this is a bad practice but we are sort of forced to do this here
     // I spent 3h trying to do it otherwise but none of the solutions worked.
-    without_interrupts(|| {
-        MOUSE.lock().process_packet(packet);
-    });
+    MOUSE.lock().process_packet(packet);
 
-    unsafe {
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
+    #[cfg(not(uefi))]
+    {
+        unsafe {
+            PICS.lock()
+                .notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
+        }
     }
+
+    #[cfg(uefi)]
+    apic::end_interrupt();
 }
 
 extern "x86-interrupt" fn general_protection_fault_handler(
@@ -160,26 +155,34 @@ extern "x86-interrupt" fn timer_handler(stack_frame: InterruptStackFrame) {
     serial_println!("TIMER");
 
     // Notify the Programmable Interrupt Controller (PIC) that the interrupt has been handled
+    #[cfg(not(uefi))]
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
+
+    #[cfg(uefi)]
+    apic::end_interrupt();
 
     // Switch to the next task, passing the interrupt frame to save current process state
     crate::process::schedule();
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    use x86_64::instructions::port::Port;
-
-    let mut port = Port::new(0x60);
+    let mut port = PortReadOnly::new(0x60);
     let scancode: u8 = unsafe { port.read() };
-    crate::kernel_processes::keyboard::add_scancode(scancode);
+    crate::desktop::input::add_scancode(scancode);
 
-    unsafe {
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
+    #[cfg(not(uefi))]
+    {
+        unsafe {
+            PICS.lock()
+                .notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
+        }
     }
+
+    #[cfg(uefi)]
+    apic::end_interrupt();
 }
 
 pub fn syscall_handler_asm() {
@@ -267,13 +270,13 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
     if result == PROCESS_EXITED {
         serial_println!("Marking process as terminated...");
 
-        disable();
+        interrupts::disable();
 
         crate::process::exit_current_process(rdi as u8);
 
         serial_println!("Process marked for exit, returning to scheduler...");
 
-        enable(); // Just to be sure
+        interrupts::enable(); // Just to be sure
 
         crate::process::schedule();
     }

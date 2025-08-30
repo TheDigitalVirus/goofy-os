@@ -3,9 +3,14 @@ name = "kernel"
 version = "0.1.0"
 edition = "2024"
 
+[build-dependencies]
+config = { path = "../config" }
+
 [dependencies]
-# bootloader = { version = "0.9", features = ["map_physical_memory"]}
+config = { path = "../config" }
+
 bootloader_api = "0.11"
+acpi = "4.1.1"
 spin = "0.10.0"
 volatile = "0.3.0"
 x86_64 = "0.15.2"
@@ -21,22 +26,15 @@ futures-util = { version = "0.3.31", default-features = false, features = ["allo
 spinning_top = "0.3.0"
 hashbrown = "0.15.4"
 ps2-mouse = "0.1.4"
+raw-cpuid = "11.5.0"
 
 [dependencies.noto-sans-mono-bitmap]
 version = "0.3"
 default-features = false
 features = [
-    "regular",
-    "size_16",
+    "font_weights_all",
+    "raster_heights_all",
     "unicode-basic-latin",
     # required for the fallback char '�'
     "unicode-specials",
 ]
-
-[[test]]
-name = "should_panic"
-harness = false
-
-[[test]]
-name = "stack_overflow"
-harness = false

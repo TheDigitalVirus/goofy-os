@@ -1,0 +1,26 @@
+ - [ ] Fix window drag outline restoring cursor colors
+ - [x] Better start menu button styles
+ - [ ] List windows on the taskbar
+ - [x] Sysinfo
+ - [ ] Fix notepad bugs
+ - [x] More font sizes
+ - [x] Fix text rendering non 100% opacity bg colors
+ - [ ] Rewrite and make a good file explorer
+ - [ ] MAKE WINDOWS FOCUSABLE
+ - [ ] FS
+   - [x] Explorer
+     - [x] Display apps to open file
+     - [x] Folders
+     - [x] Fix UI rendering to don't redraw everything
+   - [ ] Display fs info in sysinfo
+   - [x] Long names
+   - [x] Creation/update time
+   - [ ] Display times in the explorer
+   - [ ] Update last access on read
+   - [x] UEFI support
+   - [x] Fix UEFI somehow not detecting filesystem correctly
+   - [x] Disable legacy PIC/APICs when not used
+   - [x] Notepad
+     - [x] Save to fs
+     - [x] change window title based on file state
+     - [x] Save as dialog

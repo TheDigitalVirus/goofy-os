@@ -18,7 +18,7 @@ pub extern "C" fn _start() -> ! {
     let mut buffer = [0u8; 20];
     let len = format_number_to_buffer(result, &mut buffer);
     syscall_write(1, &buffer[..len]);
-    syscall_write(1, b"\n");
+    // syscall_write(1, b"\n");
 
     // Syscall 3: exit
     syscall_exit(42);
@@ -78,12 +78,13 @@ fn syscall_exit(code: u64) -> ! {
     unsafe {
         core::arch::asm!(
             "syscall",
-            in("rax") 3u64,     // syscall number for exit
+            in("rax") 60u64,     // syscall number for exit
             in("rdi") code,     // exit code
             options(noreturn, nostack)
         );
-        core::hint::unreachable_unchecked()
-    }
+    };
+
+    loop {}
 }
 
 #[panic_handler]

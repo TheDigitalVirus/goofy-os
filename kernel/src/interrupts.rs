@@ -371,7 +371,7 @@ fn handle_syscall(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
         60 => sys_exit(arg1),
         _ => {
             serial_println!("Unknown syscall: {}", number);
-            u64::MAX // Error
+            1 // Error
         }
     }
 }

@@ -56,7 +56,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         Efer::update(|e| *e |= EferFlags::SYSTEM_CALL_EXTENSIONS);
         LStar::write(VirtAddr::new(syscall_handler_asm as u64));
         SFMask::write(RFlags::INTERRUPT_FLAG);
-        Star::write(GDT.1.code, GDT.1.data, GDT.1.user_code, GDT.1.user_data);
+
+        match Star::write(GDT.1.user_code, GDT.1.user_data, GDT.1.code, GDT.1.data) {
+            Ok(()) => serial_println!("Star MSRs written successfully"),
+            Err(e) => panic!("Failed to write Star MSRs: {}", e),
+        }
     }
 
     set_pixel(10, 10, kernel::framebuffer::Color::new(255, 0, 0));

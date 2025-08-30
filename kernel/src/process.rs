@@ -57,8 +57,7 @@ impl ProcessError {
 
         // Check alignment - stacks should be 16-byte aligned, code can be 1-byte aligned
         if name.contains("stack") && (addr_u64 % 16) != 0 {
-            serial_println!("Invalid {}: not 16-byte aligned (0x{:x})", name, addr_u64);
-            return Err(ProcessError::InvalidStackPointer);
+            panic!("Invalid {}: not 16-byte aligned (0x{:x})", name, addr_u64);
         }
 
         // Check if address is in valid range (not in kernel space for user processes)

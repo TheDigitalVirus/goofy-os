@@ -286,6 +286,7 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
     // The sysretq instruction in the assembly handler will return to user mode correctly
 
     result // Return the syscall result to the assembly handler
+    // 0
 }
 
 // Minimal syscall handler for testing

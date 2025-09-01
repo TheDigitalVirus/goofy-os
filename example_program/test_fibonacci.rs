@@ -8,10 +8,10 @@ pub extern "C" fn _start() -> ! {
     // Test syscalls
 
     // Syscall 1: write to stdout
-    syscall_write(1, b"Hello from user mode!\n");
+    // syscall_write(1, b"Hello from user mode!\n");
 
     // Test fibonacci calculation - use smaller number to avoid deep recursion
-    let result = fibonacci(7);
+    let result = fibonacci(20);
     syscall_write(1, b"Fibonacci(7) = ");
 
     // Convert number to string and write it

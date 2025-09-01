@@ -64,11 +64,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
 
-    let program = include_bytes!("../test.elf");
+    #[cfg(processes_enabled)]
+    {
+        let program = include_bytes!("../test.elf");
 
-    match kernel::process::queue_user_program(program, &mut frame_allocator, phys_mem_offset) {
-        Ok(pid) => serial_println!("Successfully queued process with PID: {}", pid),
-        Err(e) => serial_println!("Failed to queue process: {:?}", e),
+        match kernel::process::queue_user_program(program, &mut frame_allocator, phys_mem_offset) {
+            Ok(pid) => serial_println!("Successfully queued process with PID: {}", pid),
+            Err(e) => serial_println!("Failed to queue process: {:?}", e),
+        }
     }
 
     #[cfg(uefi)]

@@ -24,6 +24,7 @@ pub mod fs;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;
+#[cfg(processes_enabled)]
 pub mod process;
 pub mod serial;
 pub mod surface;

@@ -1,7 +1,10 @@
 #[cfg(uefi)]
 use crate::apic;
-use crate::{hlt_loop, print, println, process::save_current_state, serial_println};
+use crate::{hlt_loop, print, println, serial_println};
 use core::{arch::asm, u64};
+
+#[cfg(processes_enabled)]
+use crate::process::{exit_current_process, save_current_state, schedule};
 
 use lazy_static::lazy_static;
 #[cfg(not(uefi))]
@@ -149,11 +152,14 @@ extern "x86-interrupt" fn double_fault_handler(
     hlt_loop();
 }
 
-extern "x86-interrupt" fn timer_handler(stack_frame: InterruptStackFrame) {
-    save_current_state(&stack_frame);
+extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
+    #[cfg(processes_enabled)]
+    {
+        save_current_state(&_stack_frame);
 
-    print!(".");
-    serial_println!("TIMER");
+        print!(".");
+        serial_println!("TIMER");
+    }
 
     // Notify the Programmable Interrupt Controller (PIC) that the interrupt has been handled
     #[cfg(not(uefi))]
@@ -166,6 +172,7 @@ extern "x86-interrupt" fn timer_handler(stack_frame: InterruptStackFrame) {
     apic::end_interrupt();
 
     // Switch to the next task, passing the interrupt frame to save current process state
+    #[cfg(processes_enabled)]
     crate::process::schedule();
 }
 
@@ -274,13 +281,15 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
 
         interrupts::disable();
 
-        crate::process::exit_current_process(rdi as u8);
+        #[cfg(processes_enabled)]
+        exit_current_process(rdi as u8);
 
         serial_println!("Process marked for exit, returning to scheduler...");
 
         interrupts::enable(); // Just to be sure
 
-        crate::process::schedule();
+        #[cfg(processes_enabled)]
+        schedule();
     }
 
     serial_println!("About to return from syscall...");
@@ -292,83 +301,6 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
 
     result // Return the syscall result to the assembly handler
     // 0
-}
-
-// Minimal syscall handler for testing
-pub fn syscall_handler_asm_minimal() {
-    unsafe {
-        asm!(
-            // Minimal syscall handler - syscall instruction already saved RCX=RIP, R11=RFLAGS
-            // CRITICAL: Save RCX (return address) and R11 (RFLAGS) first!
-
-            "push rcx",      // Save return address (MOST IMPORTANT!)
-            "push r11",      // Save RFLAGS
-
-            // Check if stack needs alignment (should be 0 after push operations)
-            // Use r12 instead of r11 to avoid conflict with RFLAGS
-            "mov r12, rsp",
-            "and r12, 0xF",  // Check last 4 bits
-            "sub rsp, r12",  // Subtract to align (0 if already aligned)
-            "push r12",      // Save the alignment offset
-
-            "push rax",      // syscall number
-            "push rdi",      // arg1
-            "push rsi",      // arg2
-            "push rdx",      // arg3
-            "push r8",       // Preserve a few more registers for safety
-            "push r9",
-            "push r10",
-
-            // Arguments are already in the right registers for Rust function call
-            // rdi=rax (syscall number), rsi=rdi (arg1), rdx=rsi (arg2), rcx=rdx (arg3)
-            "mov rcx, rdx",  // Move arg3 to 4th parameter position
-            "mov rdx, rsi",  // Move arg2 to 3rd parameter position
-            "mov rsi, rdi",  // Move arg1 to 2nd parameter position
-            "mov rdi, rax",  // Move syscall number to 1st parameter position
-
-            "call {}",       // Call minimal Rust handler
-
-            // Restore in reverse order
-            "pop r10",
-            "pop r9",
-            "pop r8",
-            "pop rdx",       // Original arg3
-            "pop rsi",       // Original arg2
-            "pop rdi",       // Original arg1
-            // Don't restore rax - it contains the return value
-            "add rsp, 8",    // Skip the saved rax
-
-            // Restore stack alignment
-            "pop r12",       // Get alignment offset
-            "add rsp, r12",  // Restore original alignment
-
-            "pop r11",       // Restore RFLAGS
-            "pop rcx",       // Restore return address
-
-            // Return to user space - RCX and R11 now have correct values
-            "sysretq",            sym syscall_handler_rust_minimal,
-            options(noreturn)
-        );
-    }
-} // Minimal Rust handler
-extern "C" fn syscall_handler_rust_minimal(rax: u64, rdi: u64, rsi: u64, rdx: u64) -> u64 {
-    serial_println!("=== MINIMAL SYSCALL ===");
-    serial_println!("Syscall {}: args({}, 0x{:x}, {})", rax, rdi, rsi, rdx);
-
-    let result = match rax {
-        1 => {
-            // sys_write - just return 0 for now to keep it simple
-            serial_println!("sys_write (minimal) -> 0");
-            0
-        }
-        _ => {
-            serial_println!("Unknown syscall -> MAX");
-            u64::MAX
-        }
-    };
-
-    serial_println!("=== MINIMAL SYSCALL DONE ===");
-    result
 }
 
 fn handle_syscall(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {

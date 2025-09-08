@@ -10,6 +10,7 @@ use crate::{
     surface::{Rect, Shape, Surface},
     time::get_utc_time,
 };
+use alloc::string::String;
 use alloc::{format, string::ToString, vec::Vec};
 use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
 use pc_keyboard::{DecodedKey, HandleControl, KeyCode, KeyState, Keyboard, ScancodeSet1, layouts};
@@ -97,6 +98,8 @@ pub fn run_desktop() -> ! {
 
     let mut start_menu_entries: Vec<(usize, usize, usize, usize, usize, usize, &str)> = Vec::new(); // (idx, label idx, x, y, width, height, label)
     let mut start_menu_open = false;
+    let mut taskbar_window_shapes: Vec<(usize, usize, usize)> = Vec::new(); // (background_idx, text_idx, window_id)
+    let mut prev_windows_state: Vec<(usize, String, bool)> = Vec::new(); // Track previous window state for change detection
 
     // Start menu placeholder
     start_menu_entries.push((
@@ -335,6 +338,83 @@ pub fn run_desktop() -> ! {
             desktop.update_text_content(date_shape_idx, date_str, None);
         }
 
+        // Update taskbar window icons only when necessary
+        let current_windows = window_manager.get_taskbar_windows();
+
+        // Check if window state has changed
+        let windows_changed = current_windows.len() != prev_windows_state.len()
+            || current_windows.iter().zip(prev_windows_state.iter()).any(
+                |((id1, title1, focus1), (id2, title2, focus2))| {
+                    id1 != id2 || title1 != title2 || focus1 != focus2
+                },
+            );
+
+        if windows_changed {
+            // Remove old taskbar window shapes
+            for (bg_idx, text_idx, _) in &taskbar_window_shapes {
+                desktop.hide_shape(*bg_idx);
+                desktop.hide_shape(*text_idx);
+            }
+            taskbar_window_shapes.clear();
+
+            // Add new taskbar window shapes
+            const TASKBAR_WINDOW_WIDTH: usize = 120;
+            const TASKBAR_WINDOW_HEIGHT: usize = 30;
+            let taskbar_start_x = 170; // After start button
+
+            for (i, (window_id, title, is_focused)) in current_windows.iter().enumerate() {
+                let x = taskbar_start_x + i * (TASKBAR_WINDOW_WIDTH + 5);
+                let y = screen_size.1 as usize - TASKBAR_HEIGHT + 10;
+
+                // Skip if would overlap with clock area
+                if x + TASKBAR_WINDOW_WIDTH > screen_size.0 as usize - 100 {
+                    break;
+                }
+
+                let bg_color = if *is_focused {
+                    Color::new(200, 200, 255) // Light blue for focused
+                } else {
+                    Color::new(220, 220, 220) // Light gray for unfocused
+                };
+
+                let bg_idx = desktop.add_shape(Shape::Rectangle {
+                    x,
+                    y,
+                    width: TASKBAR_WINDOW_WIDTH,
+                    height: TASKBAR_WINDOW_HEIGHT,
+                    color: bg_color,
+                    filled: true,
+                    hide: false,
+                });
+
+                // Truncate title if too long
+                let display_title = if title.len() > 12 {
+                    format!("{}...", &title[..9])
+                } else {
+                    title.to_string()
+                };
+
+                let text_idx = desktop.add_shape(Shape::Text {
+                    x: x + 5,
+                    y: y + 8,
+                    content: display_title,
+                    color: Color::BLACK,
+                    background_color: bg_color,
+                    font_size: RasterHeight::Size16,
+                    font_weight: FontWeight::Regular,
+                    hide: false,
+                });
+
+                taskbar_window_shapes.push((bg_idx, text_idx, *window_id));
+            }
+
+            // Update the previous state cache
+            prev_windows_state = current_windows
+                .iter()
+                .map(|(id, title, focus)| (*id, title.to_string(), *focus))
+                .collect();
+        }
+
         while let Some((x, y)) = click_queue.pop() {
             let (mut handled, redraw_region) = window_manager.handle_mouse_click(x, y);
             if let Some((x, y, width, height)) = redraw_region {
@@ -347,6 +427,26 @@ pub fn run_desktop() -> ! {
 
             let x = x as usize;
             let y = y as usize;
+
+            // Check for clicks on taskbar window icons
+            if !handled {
+                for (_bg_idx, _text_idx, window_id) in &taskbar_window_shapes {
+                    // Get the shape bounds (we need to calculate them since we stored the indices)
+                    let taskbar_start_x = 170;
+                    let window_index = taskbar_window_shapes
+                        .iter()
+                        .position(|(_, _, id)| id == window_id)
+                        .unwrap_or(0);
+                    let icon_x = taskbar_start_x + window_index * 125;
+                    let icon_y = screen_size.1 as usize - TASKBAR_HEIGHT + 10;
+
+                    if x >= icon_x && x < icon_x + 120 && y >= icon_y && y < icon_y + 30 {
+                        window_manager.handle_taskbar_click(*window_id);
+                        handled = true;
+                        break;
+                    }
+                }
+            }
 
             if start_menu_open {
                 for (_, _, item_x, item_y, width, height, label) in &start_menu_entries {

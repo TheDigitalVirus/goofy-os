@@ -9,7 +9,7 @@ config = { path = "../config" }
 [dependencies]
 config = { path = "../config" }
 
-bootloader_api = "0.11"
+bootloader_api = "0.11.12"
 acpi = "4.1.1"
 spin = "0.10.0"
 volatile = "0.3.0"

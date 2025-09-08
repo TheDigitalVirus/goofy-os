@@ -9,6 +9,7 @@ fn main() {
     };
 
     let mut cmd = std::process::Command::new("qemu-system-x86_64");
+    cmd.arg("-m").arg("256M");
     cmd.arg("-serial").arg("stdio");
     if uefi {
         cmd.arg("-bios").arg(ovmf_prebuilt::ovmf_pure_efi());

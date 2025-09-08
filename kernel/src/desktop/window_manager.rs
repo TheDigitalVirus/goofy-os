@@ -321,16 +321,24 @@ impl Window {
 
 pub struct WindowManager {
     pub windows: Vec<Window>,
+    window_order: Vec<usize>, // Window IDs from back to front (last is topmost)
+    next_window_id: usize,
 }
 
 impl WindowManager {
     pub fn new() -> Self {
         Self {
             windows: Vec::new(),
+            window_order: Vec::new(),
+            next_window_id: 1,
         }
     }
 
     pub fn add_window(&mut self, mut window: Window) {
+        // Assign a unique ID to the window
+        window.id = self.next_window_id;
+        self.next_window_id += 1;
+
         match &mut window.application {
             Some(Application::Calculator(calculator)) => {
                 calculator.init(&mut window.surface);
@@ -347,7 +355,52 @@ impl WindowManager {
             None => {}
         }
 
+        // Add window to front of z-order (becomes focused)
+        self.window_order.push(window.id);
         self.windows.push(window);
+    }
+
+    pub fn focus_window(&mut self, window_id: usize) {
+        if self.windows.iter().any(|w| w.id == window_id) {
+            // Remove window from current position in order
+            self.window_order.retain(|&id| id != window_id);
+            // Add to front (becomes focused)
+            self.window_order.push(window_id);
+        }
+
+        // Mark window as dirty to ensure it gets re-rendered
+        if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
+            window.surface.is_dirty = true;
+        }
+    }
+
+    pub fn get_focused_window_id(&self) -> Option<usize> {
+        self.window_order.last().copied()
+    }
+
+    pub fn get_windows_in_render_order(&self) -> Vec<&Window> {
+        let mut windows: Vec<&Window> = Vec::new();
+
+        // Add windows in z-order (back to front)
+        for &window_id in &self.window_order {
+            if let Some(window) = self.windows.iter().find(|w| w.id == window_id) {
+                windows.push(window);
+            }
+        }
+
+        windows
+    }
+
+    pub fn get_taskbar_windows(&self) -> Vec<(usize, &str, bool)> {
+        let focused_id = self.get_focused_window_id();
+
+        self.windows
+            .iter()
+            .map(|w| {
+                let is_focused = Some(w.id) == focused_id;
+                (w.id, w.title.as_str(), is_focused)
+            })
+            .collect()
     }
 
     pub fn render(
@@ -357,7 +410,16 @@ impl WindowManager {
     ) -> bool {
         let mut did_render = false;
 
-        for window in &mut self.windows {
+        // Get windows in render order (focused window renders last/on top)
+        let window_ids: Vec<usize> = self
+            .get_windows_in_render_order()
+            .iter()
+            .map(|w| w.id)
+            .collect();
+
+        for window_id in window_ids {
+            let window = self.windows.iter_mut().find(|w| w.id == window_id).unwrap();
+
             // Skip rendering if window is being dragged (only show drag preview)
             if window.is_dragging {
                 continue;
@@ -387,25 +449,68 @@ impl WindowManager {
         x: i16,
         y: i16,
     ) -> (bool, Option<(usize, usize, usize, usize)>) {
+        let mut window_to_focus: Option<usize> = None;
+        let mut window_to_remove: Option<usize> = None;
+        let mut remove_bounds: Option<(usize, usize, usize, usize)> = None;
+        let mut app_result: Option<(String, String)> = None;
+
+        // Check if the click was on the close button first
+        for window in &self.windows {
+            if x as usize >= window.x + window.width - 20
+                && x as usize <= window.x + window.width
+                && y as usize >= window.y - 20
+                && y as usize <= window.y
+            {
+                window_to_remove = Some(window.id);
+                remove_bounds = Some((
+                    window.x - 1,
+                    window.y - 20,
+                    window.width + 2,
+                    window.height + 21,
+                ));
+                break;
+            }
+        }
+
+        if let Some(window_id) = window_to_remove {
+            self.windows.retain(|w| w.id != window_id);
+            self.window_order.retain(|&id| id != window_id);
+
+            return (true, remove_bounds);
+        }
+
+        // Check for clicks on window areas
         for window in &mut self.windows {
+            // Check for clicks on title bar (for focusing)
+            if x as usize >= window.x - 1
+                && x as usize <= window.x + window.width
+                && y as usize >= window.y - 20
+                && y as usize <= window.y
+            {
+                window_to_focus = Some(window.id);
+            }
+
+            // Check for clicks on window content
             if x as usize >= window.x
                 && x as usize <= window.x + window.width
                 && y as usize >= window.y
                 && y as usize <= window.y + window.height
             {
+                window_to_focus = Some(window.id);
+
                 if let Some(Application::Calculator(calculator)) = &mut window.application {
                     let x = (x as usize).saturating_sub(window.x);
                     let y = (y as usize).saturating_sub(window.y);
 
                     calculator.handle_mouse_click(x, y);
-                    return (true, None);
+                    break;
                 }
                 if let Some(Application::Notepad(notepad)) = &mut window.application {
                     let x = (x as usize).saturating_sub(window.x);
                     let y = (y as usize).saturating_sub(window.y);
 
                     notepad.handle_mouse_click(x, y);
-                    return (true, None);
+                    break;
                 }
                 if let Some(Application::FileManager(filemanager)) = &mut window.application {
                     let x = (x as usize).saturating_sub(window.x);
@@ -413,42 +518,39 @@ impl WindowManager {
 
                     let (_, open_app) = filemanager.handle_click(x, y, &mut window.surface);
                     if let Some((file_path, app)) = open_app {
-                        self.open_app_handler(file_path, app);
+                        app_result = Some((file_path, app));
                     }
-
-                    return (true, None);
+                    break;
                 }
                 if let Some(Application::SysInfo(sysinfo)) = &mut window.application {
                     let x = (x as usize).saturating_sub(window.x);
                     let y = (y as usize).saturating_sub(window.y);
 
                     sysinfo.handle_mouse_click(x, y);
-                    return (true, None);
+                    break;
                 }
+                break; // Always break after handling content click
             }
         }
 
-        // Check if the click was on the close button
-        for window in &self.windows {
-            if x as usize >= window.x + window.width - 20
-                && x as usize <= window.x + window.width
-                && y as usize >= window.y - 20
-                && y as usize <= window.y
-            {
-                let window_id = window.id; // Rust borrowing checker goes brrr
-                let bounds = (
-                    window.x - 1,
-                    window.y - 20,
-                    window.width + 2,
-                    window.height + 21,
-                ); // Don't forget the outline and title bar :)
-
-                self.windows.retain(|w| w.id != window_id);
-                return (true, Some(bounds));
-            }
+        if let Some(window_id) = window_to_focus {
+            self.focus_window(window_id);
         }
 
-        (false, None)
+        if let Some((file_path, app)) = app_result {
+            self.open_app_handler(file_path, app);
+        }
+
+        (window_to_focus.is_some(), None)
+    }
+
+    pub fn handle_taskbar_click(&mut self, window_id: usize) -> bool {
+        if self.windows.iter().any(|w| w.id == window_id) {
+            self.focus_window(window_id);
+            true
+        } else {
+            false
+        }
     }
 
     fn open_app_handler(&mut self, file_path: String, app: String) {
@@ -539,35 +641,35 @@ impl WindowManager {
         _alt_pressed: bool,
         _shift_pressed: bool,
     ) {
-        // Send character input to the focused window (for now, just the first notepad or filemanager window)
-        for window in &mut self.windows {
-            match &mut window.application {
-                Some(Application::Notepad(notepad)) => {
-                    notepad.handle_char_input(ch, ctrl_pressed);
-                    // break; // Only send to first notepad for now
+        // Send character input only to the focused window
+        if let Some(focused_id) = self.get_focused_window_id() {
+            if let Some(window) = self.windows.iter_mut().find(|w| w.id == focused_id) {
+                match &mut window.application {
+                    Some(Application::Notepad(notepad)) => {
+                        notepad.handle_char_input(ch, ctrl_pressed);
+                    }
+                    Some(Application::FileManager(filemanager)) => {
+                        filemanager.handle_char_input(ch, &mut window.surface);
+                    }
+                    _ => {}
                 }
-                Some(Application::FileManager(filemanager)) => {
-                    filemanager.handle_char_input(ch, &mut window.surface);
-                    // break; // Only send to first filemanager for now
-                }
-                _ => {}
             }
         }
     }
 
     pub fn handle_key_input(&mut self, key: KeyCode) {
-        // Handle key input for focused window (for now, just the first notepad or filemanager window)
-        for window in &mut self.windows {
-            match &mut window.application {
-                Some(Application::Notepad(notepad)) => {
-                    notepad.handle_key_input(key);
-                    // break; // Only send to first notepad for now
+        // Handle key input only for the focused window
+        if let Some(focused_id) = self.get_focused_window_id() {
+            if let Some(window) = self.windows.iter_mut().find(|w| w.id == focused_id) {
+                match &mut window.application {
+                    Some(Application::Notepad(notepad)) => {
+                        notepad.handle_key_input(key);
+                    }
+                    Some(Application::FileManager(filemanager)) => {
+                        filemanager.handle_key_input(key, &mut window.surface);
+                    }
+                    _ => {}
                 }
-                Some(Application::FileManager(filemanager)) => {
-                    filemanager.handle_key_input(key, &mut window.surface);
-                    // break; // Only send to first filemanager for now
-                }
-                _ => {}
             }
         }
     }
@@ -579,7 +681,7 @@ pub fn launch_calculator(window_manager: &mut WindowManager) {
         100,
         205,
         315,
-        1,
+        0, // Will be overridden by add_window
         "Calculator".to_string(),
         Some(Application::Calculator(Calculator::new())),
     ));
@@ -591,7 +693,7 @@ pub fn launch_filemanager(window_manager: &mut WindowManager) {
         80,
         500,
         400,
-        4,
+        0, // Will be overridden by add_window
         "File Manager".to_string(),
         Some(Application::FileManager(FileManager::new())),
     ));
@@ -603,7 +705,7 @@ pub fn launch_notepad(window_manager: &mut WindowManager) {
         150,
         600,
         400,
-        2,
+        0, // Will be overridden by add_window
         "Notepad".to_string(),
         Some(Application::Notepad(Notepad::new(None))),
     ));
@@ -615,7 +717,7 @@ pub fn launch_notepad_with_file(window_manager: &mut WindowManager, file_path: S
         150,
         600,
         400,
-        2,
+        0, // Will be overridden by add_window
         "Notepad".to_string(),
         Some(Application::Notepad(Notepad::new(Some(file_path)))),
     ));
@@ -627,7 +729,7 @@ pub fn launch_sysinfo(window_manager: &mut WindowManager) {
         100,
         400,
         350,
-        3,
+        0, // Will be overridden by add_window
         "System Information".to_string(),
         Some(Application::SysInfo(SysInfo::new())),
     ));

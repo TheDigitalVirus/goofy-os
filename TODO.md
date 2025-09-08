@@ -1,12 +1,14 @@
  - [ ] Fix window drag outline restoring cursor colors
  - [x] Better start menu button styles
- - [ ] List windows on the taskbar
+ - [x] List windows on the taskbar
  - [x] Sysinfo
  - [ ] Fix notepad bugs
  - [x] More font sizes
  - [x] Fix text rendering non 100% opacity bg colors
  - [ ] Rewrite and make a good file explorer
- - [ ] MAKE WINDOWS FOCUSABLE
+ - [x] MAKE WINDOWS FOCUSABLE
+ - [ ] Make windows minimizable
+ - [x] Mark windows as dirty when focused and unfocused
  - [ ] FS
    - [x] Explorer
      - [x] Display apps to open file

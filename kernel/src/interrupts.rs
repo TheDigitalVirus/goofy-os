@@ -1,8 +1,10 @@
 #[cfg(uefi)]
 use crate::apic;
-use crate::{hlt_loop, print, println, serial_println};
+use crate::{hlt_loop, println, serial_println};
 use core::{arch::asm, u64};
 
+#[cfg(processes_enabled)]
+use crate::print;
 #[cfg(processes_enabled)]
 use crate::process::{exit_current_process, save_current_state, schedule};
 

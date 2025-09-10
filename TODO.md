@@ -13,8 +13,8 @@
  - [ ] Terminal
  - [x] BACKBUFFER
    - [x] Cleanup backbuffer code
-   - [ ] Make backbuffer optional (config)
-   - [ ] Test performance impact of backbuffer
+   - [x] Make backbuffer optional (config)
+   - [x] Test performance impact of backbuffer
  - [ ] FS
    - [x] Explorer
      - [x] Display apps to open file

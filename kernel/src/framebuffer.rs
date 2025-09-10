@@ -1,6 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use bootloader_api::info::{FrameBuffer, FrameBufferInfo, PixelFormat};
+use config::CONFIG;
 use conquer_once::spin::OnceCell;
 use core::{fmt, slice};
 use font_constants::BACKUP_CHAR;
@@ -406,7 +407,7 @@ pub struct FrameBufferWriter {
     x_pos: usize,
     y_pos: usize,
     cursor_background: CursorBackground,
-    backbuffer: BackBuffer,
+    backbuffer: Option<BackBuffer>,
     dirty_tracker: DirtyTracker,
 }
 
@@ -418,14 +419,22 @@ impl FrameBufferWriter {
         frame_allocator: &mut (impl FrameAllocator<Size2MiB> + FrameAllocator<Size4KiB>),
         mapper: &mut impl Mapper<Size2MiB>,
     ) -> Self {
+        let backbuffer = if CONFIG.backbuffer_enabled {
+            Some(
+                BackBuffer::new(info, mapper, frame_allocator)
+                    .expect("Failed to create backbuffer"),
+            )
+        } else {
+            None
+        };
+
         let mut logger = Self {
             framebuffer,
             info,
             x_pos: 0,
             y_pos: 0,
             cursor_background: CursorBackground::new(info.bytes_per_pixel),
-            backbuffer: BackBuffer::new(info, mapper, frame_allocator)
-                .expect("Failed to create backbuffer"),
+            backbuffer,
             dirty_tracker: DirtyTracker::new(info.width, info.height),
         };
 
@@ -446,7 +455,11 @@ impl FrameBufferWriter {
         // Mark all tiles as dirty since we're filling the entire buffer
         self.dirty_tracker.mark_all_dirty();
 
-        self.backbuffer.buffer_mut().fill(brightness);
+        if let Some(ref mut backbuffer) = self.backbuffer {
+            backbuffer.buffer_mut().fill(brightness);
+        } else {
+            self.framebuffer.fill(brightness);
+        }
     }
 
     /// Erases all text on the screen. Resets `self.x_pos` and `self.y_pos`.
@@ -457,7 +470,11 @@ impl FrameBufferWriter {
         // Mark all tiles as dirty since we're clearing the entire buffer
         self.dirty_tracker.mark_all_dirty();
 
-        self.backbuffer.clear();
+        if let Some(ref mut backbuffer) = self.backbuffer {
+            backbuffer.clear();
+        } else {
+            self.framebuffer.fill(0);
+        }
     }
 
     fn width(&self) -> usize {
@@ -562,10 +579,18 @@ impl FrameBufferWriter {
         let bytes_per_pixel = self.info.bytes_per_pixel;
         let byte_offset = pixel_offset * bytes_per_pixel;
 
-        let bb_slice = self.backbuffer.buffer_mut();
-        if byte_offset + bytes_per_pixel <= bb_slice.len() {
-            bb_slice[byte_offset..(byte_offset + bytes_per_pixel)]
-                .copy_from_slice(&color[..bytes_per_pixel]);
+        if let Some(ref mut backbuffer) = self.backbuffer {
+            let bb_slice = backbuffer.buffer_mut();
+            if byte_offset + bytes_per_pixel <= bb_slice.len() {
+                bb_slice[byte_offset..(byte_offset + bytes_per_pixel)]
+                    .copy_from_slice(&color[..bytes_per_pixel]);
+            }
+        } else {
+            // Write directly to framebuffer
+            if byte_offset + bytes_per_pixel <= self.framebuffer.len() {
+                self.framebuffer[byte_offset..(byte_offset + bytes_per_pixel)]
+                    .copy_from_slice(&color[..bytes_per_pixel]);
+            }
         }
     }
 
@@ -578,9 +603,14 @@ impl FrameBufferWriter {
         let bytes_per_pixel = self.info.bytes_per_pixel;
         let byte_offset = pixel_offset * bytes_per_pixel;
 
-        let bb_slice = self.backbuffer.buffer();
-        if byte_offset + bytes_per_pixel <= bb_slice.len() {
-            let bytes = &bb_slice[byte_offset..(byte_offset + bytes_per_pixel)];
+        let buffer_slice = if let Some(ref backbuffer) = self.backbuffer {
+            backbuffer.buffer()
+        } else {
+            &self.framebuffer
+        };
+
+        if byte_offset + bytes_per_pixel <= buffer_slice.len() {
+            let bytes = &buffer_slice[byte_offset..(byte_offset + bytes_per_pixel)];
             return match self.info.pixel_format {
                 PixelFormat::Rgb => Color::new(bytes[0], bytes[1], bytes[2]),
                 PixelFormat::Bgr => Color::new(bytes[2], bytes[1], bytes[0]),
@@ -612,9 +642,18 @@ impl FrameBufferWriter {
             self.dirty_tracker.mark_dirty(x, y, max_width, 1);
         }
 
-        let bb_slice = self.backbuffer.buffer_mut();
-        if start_offset + copy_size <= bb_slice.len() {
-            bb_slice[start_offset..start_offset + copy_size].copy_from_slice(&data[..copy_size]);
+        if let Some(ref mut backbuffer) = self.backbuffer {
+            let bb_slice = backbuffer.buffer_mut();
+            if start_offset + copy_size <= bb_slice.len() {
+                bb_slice[start_offset..start_offset + copy_size]
+                    .copy_from_slice(&data[..copy_size]);
+            }
+        } else {
+            // Write directly to framebuffer
+            if start_offset + copy_size <= self.framebuffer.len() {
+                self.framebuffer[start_offset..start_offset + copy_size]
+                    .copy_from_slice(&data[..copy_size]);
+            }
         }
     }
 
@@ -630,9 +669,14 @@ impl FrameBufferWriter {
         let start_offset = (y * self.info.stride + x) * bytes_per_pixel;
         let data_size = max_width * bytes_per_pixel;
 
-        let bb_slice = self.backbuffer.buffer();
-        if start_offset + data_size <= bb_slice.len() {
-            return bb_slice[start_offset..start_offset + data_size].to_vec();
+        let buffer_slice = if let Some(ref backbuffer) = self.backbuffer {
+            backbuffer.buffer()
+        } else {
+            &self.framebuffer
+        };
+
+        if start_offset + data_size <= buffer_slice.len() {
+            return buffer_slice[start_offset..start_offset + data_size].to_vec();
         }
 
         return Vec::new();
@@ -757,10 +801,17 @@ impl FrameBufferWriter {
                 let max_bytes = (self.width() - start_x as usize) * self.info.bytes_per_pixel;
                 let actual_copy_size = copy_size.min(max_bytes);
 
-                let bb_slice = self.backbuffer.buffer();
-                if byte_offset + actual_copy_size <= bb_slice.len() {
+                let buffer_slice = if let Some(ref backbuffer) = self.backbuffer {
+                    backbuffer.buffer()
+                } else {
+                    &self.framebuffer
+                };
+
+                if byte_offset + actual_copy_size <= buffer_slice.len() {
                     self.cursor_background.saved_pixels[idx..idx + actual_copy_size]
-                        .copy_from_slice(&bb_slice[byte_offset..byte_offset + actual_copy_size]);
+                        .copy_from_slice(
+                            &buffer_slice[byte_offset..byte_offset + actual_copy_size],
+                        );
                 }
 
                 idx += copy_size;
@@ -798,10 +849,18 @@ impl FrameBufferWriter {
                 let pixel_offset = cursor_y as usize * self.info.stride + start_x as usize;
                 let byte_offset = pixel_offset * self.info.bytes_per_pixel;
 
-                let bb_slice = self.backbuffer.buffer_mut();
-                if byte_offset + size <= bb_slice.len() {
-                    bb_slice[byte_offset..byte_offset + size]
-                        .copy_from_slice(&self.cursor_background.saved_pixels[idx..idx + size]);
+                if let Some(ref mut backbuffer) = self.backbuffer {
+                    let bb_slice = backbuffer.buffer_mut();
+                    if byte_offset + size <= bb_slice.len() {
+                        bb_slice[byte_offset..byte_offset + size]
+                            .copy_from_slice(&self.cursor_background.saved_pixels[idx..idx + size]);
+                    }
+                } else {
+                    // Restore directly to framebuffer
+                    if byte_offset + size <= self.framebuffer.len() {
+                        self.framebuffer[byte_offset..byte_offset + size]
+                            .copy_from_slice(&self.cursor_background.saved_pixels[idx..idx + size]);
+                    }
                 }
 
                 idx += size;
@@ -854,11 +913,18 @@ impl FrameBufferWriter {
             .take(max_width * bytes_per_pixel)
             .collect();
 
-        let bb_slice = self.backbuffer.buffer_mut();
-        if start_offset + max_width * bytes_per_pixel <= bb_slice.len() {
-            bb_slice[start_offset..start_offset + max_width * bytes_per_pixel]
-                .copy_from_slice(&data);
-            return;
+        if let Some(ref mut backbuffer) = self.backbuffer {
+            let bb_slice = backbuffer.buffer_mut();
+            if start_offset + max_width * bytes_per_pixel <= bb_slice.len() {
+                bb_slice[start_offset..start_offset + max_width * bytes_per_pixel]
+                    .copy_from_slice(&data);
+            }
+        } else {
+            // Write directly to framebuffer
+            if start_offset + max_width * bytes_per_pixel <= self.framebuffer.len() {
+                self.framebuffer[start_offset..start_offset + max_width * bytes_per_pixel]
+                    .copy_from_slice(&data);
+            }
         }
     }
 
@@ -935,9 +1001,12 @@ impl FrameBufferWriter {
 
     /// Present the backbuffer to the screen (swap buffers)
     pub fn present_backbuffer(&mut self) {
-        let bb_data = self.backbuffer.buffer();
-        let copy_size = bb_data.len().min(self.framebuffer.len());
-        self.framebuffer[..copy_size].copy_from_slice(&bb_data[..copy_size]);
+        if let Some(ref backbuffer) = self.backbuffer {
+            let bb_data = backbuffer.buffer();
+            let copy_size = bb_data.len().min(self.framebuffer.len());
+            self.framebuffer[..copy_size].copy_from_slice(&bb_data[..copy_size]);
+        }
+        // If backbuffer is None, we're already writing directly to framebuffer, so no action needed
     }
 
     /// Present only dirty regions of the backbuffer to the screen (optimized)
@@ -949,30 +1018,34 @@ impl FrameBufferWriter {
             return 0; // Nothing to update
         }
 
-        let bb_data = self.backbuffer.buffer();
-        let bytes_per_pixel = self.info.bytes_per_pixel;
-        let stride = self.info.stride;
+        if let Some(ref backbuffer) = self.backbuffer {
+            let bb_data = backbuffer.buffer();
+            let bytes_per_pixel = self.info.bytes_per_pixel;
+            let stride = self.info.stride;
 
-        // Copy only dirty regions
-        for (x, y) in dirty_regions {
-            let x = x as usize * TILE_SIZE;
-            let y = y as usize * TILE_SIZE;
-            let width = TILE_SIZE.min(self.info.width - x);
-            let height = TILE_SIZE.min(self.info.height - y);
+            // Copy only dirty regions
+            for (x, y) in dirty_regions {
+                let x = x as usize * TILE_SIZE;
+                let y = y as usize * TILE_SIZE;
+                let width = TILE_SIZE.min(self.info.width - x);
+                let height = TILE_SIZE.min(self.info.height - y);
 
-            for row in y..(y + height) {
-                if row >= self.info.height {
-                    break;
-                }
+                for row in y..(y + height) {
+                    if row >= self.info.height {
+                        break;
+                    }
 
-                let fb_start = (row * stride + x) * bytes_per_pixel;
-                let fb_end = fb_start + (width * bytes_per_pixel);
+                    let fb_start = (row * stride + x) * bytes_per_pixel;
+                    let fb_end = fb_start + (width * bytes_per_pixel);
 
-                if fb_end <= self.framebuffer.len() && fb_end <= bb_data.len() {
-                    self.framebuffer[fb_start..fb_end].copy_from_slice(&bb_data[fb_start..fb_end]);
+                    if fb_end <= self.framebuffer.len() && fb_end <= bb_data.len() {
+                        self.framebuffer[fb_start..fb_end]
+                            .copy_from_slice(&bb_data[fb_start..fb_end]);
+                    }
                 }
             }
         }
+        // If backbuffer is None, we're already writing directly to framebuffer, so just clear dirty regions
 
         regions_count
     }

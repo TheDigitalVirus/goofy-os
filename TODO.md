@@ -12,7 +12,7 @@
  - [ ] Snake game
  - [ ] Terminal
  - [x] BACKBUFFER
-   - [ ] Cleanup backbuffer code
+   - [x] Cleanup backbuffer code
    - [ ] Make backbuffer optional (config)
    - [ ] Test performance impact of backbuffer
  - [ ] FS

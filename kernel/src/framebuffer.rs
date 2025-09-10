@@ -11,8 +11,7 @@ use spinning_top::Spinlock;
 use x86_64::{
     VirtAddr,
     structures::paging::{
-        FrameAllocator, Mapper, Page, PageTableFlags, PhysFrame, Size2MiB, Size4KiB,
-        mapper::MapToError,
+        FrameAllocator, Mapper, Page, PageTableFlags, Size2MiB, Size4KiB, mapper::MapToError,
     },
 };
 
@@ -192,11 +191,6 @@ impl DirtyTracker {
     pub fn clear_all_dirty(&mut self) {
         self.dirty_tiles.fill(false);
     }
-
-    /// Check if any tiles are dirty
-    pub fn has_dirty_tiles(&self) -> bool {
-        self.dirty_tiles.iter().any(|&dirty| dirty)
-    }
 }
 
 /// Constants for the usage of the [`noto_sans_mono_bitmap`] crate.
@@ -275,9 +269,7 @@ impl Color {
 /// BackBuffer using 2MiB memory pages for efficient double buffering
 pub struct BackBuffer {
     buffer: &'static mut [u8],
-    frames: Vec<PhysFrame<Size2MiB>>,
     info: FrameBufferInfo,
-    virtual_addr: VirtAddr,
     total_size: usize,
 }
 
@@ -350,9 +342,7 @@ impl BackBuffer {
 
         Ok(BackBuffer {
             buffer,
-            frames,
             info,
-            virtual_addr,
             total_size: total_allocated_size,
         })
     }
@@ -387,21 +377,6 @@ impl BackBuffer {
         let dst = self.buffer_mut();
         let copy_size = src.len().min(dst.len());
         dst[..copy_size].copy_from_slice(&src[..copy_size]);
-    }
-
-    /// Get the physical frames for this backbuffer
-    pub fn frames(&self) -> &[PhysFrame<Size2MiB>] {
-        &self.frames
-    }
-
-    /// Get the first physical frame for this backbuffer (for compatibility)
-    pub fn frame(&self) -> PhysFrame<Size2MiB> {
-        self.frames[0]
-    }
-
-    /// Get the virtual address of this backbuffer
-    pub fn virtual_addr(&self) -> VirtAddr {
-        self.virtual_addr
     }
 }
 
@@ -1001,59 +976,10 @@ impl FrameBufferWriter {
 
         regions_count
     }
-
-    /// Clear the backbuffer
-    pub fn clear_backbuffer(&mut self) {
-        self.backbuffer.clear();
-    }
-
-    /// Copy entire framebuffer contents to backbuffer
-    pub fn copy_to_backbuffer(&mut self) {
-        self.backbuffer.copy_from(self.framebuffer);
-    }
-
-    /// Copy entire backbuffer contents to framebuffer
-    pub fn copy_from_backbuffer(&mut self) {
-        let bb_data = self.backbuffer.buffer();
-        let copy_size = bb_data.len().min(self.framebuffer.len());
-        self.framebuffer[..copy_size].copy_from_slice(&bb_data[..copy_size]);
-    }
-
-    /// Get buffer info
-    pub fn get_info(&self) -> FrameBufferInfo {
-        self.info
-    }
-
-    /// Mark a region as dirty for optimized rendering
-    pub fn mark_dirty_region(&mut self, x: usize, y: usize, width: usize, height: usize) {
-        self.dirty_tracker.mark_dirty(x, y, width, height);
-    }
-
-    /// Mark the entire screen as dirty
-    pub fn mark_all_dirty(&mut self) {
-        self.dirty_tracker.mark_all_dirty();
-    }
-
-    /// Check if there are any dirty regions
-    pub fn has_dirty_regions(&self) -> bool {
-        self.dirty_tracker.has_dirty_tiles()
-    }
-
-    /// Get the number of dirty tiles (for debugging/profiling)
-    pub fn get_dirty_tile_count(&self) -> usize {
-        self.dirty_tracker
-            .dirty_tiles
-            .iter()
-            .filter(|&&dirty| dirty)
-            .count()
-    }
 }
 
 unsafe impl Send for FrameBufferWriter {}
 unsafe impl Sync for FrameBufferWriter {}
-
-unsafe impl Send for BackBuffer {}
-unsafe impl Sync for BackBuffer {}
 
 impl fmt::Write for FrameBufferWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -1085,118 +1011,4 @@ pub fn init(
             mapper,
         ))
     });
-}
-
-/// Present the backbuffer to the screen
-pub fn present() {
-    if let Some(framebuffer) = FRAMEBUFFER.get() {
-        let mut fb = framebuffer.lock();
-        fb.present_backbuffer();
-    }
-}
-
-/// Present only dirty regions of the backbuffer to the screen (optimized)
-pub fn present_dirty() -> usize {
-    if let Some(framebuffer) = FRAMEBUFFER.get() {
-        let mut fb = framebuffer.lock();
-        fb.present_backbuffer_dirty()
-    } else {
-        0
-    }
-}
-
-/// Mark a region as dirty for optimized rendering
-pub fn mark_dirty_region(x: usize, y: usize, width: usize, height: usize) {
-    if let Some(framebuffer) = FRAMEBUFFER.get() {
-        let mut fb = framebuffer.lock();
-        fb.mark_dirty_region(x, y, width, height);
-    }
-}
-
-/// Check if there are dirty regions that need updating
-pub fn has_dirty_regions() -> bool {
-    if let Some(framebuffer) = FRAMEBUFFER.get() {
-        let fb = framebuffer.lock();
-        fb.has_dirty_regions()
-    } else {
-        false
-    }
-}
-
-/// Clear the backbuffer
-pub fn clear_backbuffer() {
-    if let Some(framebuffer) = FRAMEBUFFER.get() {
-        let mut fb = framebuffer.lock();
-        fb.clear_backbuffer();
-    }
-}
-
-pub fn set_buffer(buffer: &[u8]) {
-    if let Some(fb) = FRAMEBUFFER.get() {
-        fb.lock().framebuffer.copy_from_slice(buffer);
-    } else {
-        panic!("FrameBuffer not initialized");
-    }
-}
-
-/// Read a pixel from the active buffer (backbuffer if enabled, framebuffer otherwise)
-pub fn read_pixel(x: usize, y: usize) -> Option<Color> {
-    if let Some(framebuffer) = FRAMEBUFFER.get() {
-        let fb = framebuffer.lock();
-        Some(fb.read_pixel(x, y))
-    } else {
-        None
-    }
-}
-
-/// Write a pixel to the active buffer (backbuffer if enabled, framebuffer otherwise)
-pub fn write_pixel(x: usize, y: usize, color: Color) {
-    if let Some(framebuffer) = FRAMEBUFFER.get() {
-        let mut fb = framebuffer.lock();
-        fb.write_pixel(x, y, color);
-    }
-}
-
-/// Read a row of pixels from the active buffer
-pub fn read_pixel_row(x: usize, y: usize, count: usize) -> Vec<u8> {
-    if let Some(framebuffer) = FRAMEBUFFER.get() {
-        let fb = framebuffer.lock();
-        fb.read_raw_pixel_row(x, y, count)
-    } else {
-        Vec::new()
-    }
-}
-
-/// Write a row of pixels to the active buffer
-pub fn write_pixel_row(x: usize, y: usize, data: &[u8]) {
-    if let Some(framebuffer) = FRAMEBUFFER.get() {
-        let mut fb = framebuffer.lock();
-        fb.write_raw_pixel_row(x, y, data);
-    }
-}
-
-/// Fill the active buffer with a single brightness value
-pub fn fill_buffer(brightness: u8) {
-    if let Some(framebuffer) = FRAMEBUFFER.get() {
-        let mut fb = framebuffer.lock();
-        fb.fill(brightness);
-    }
-}
-
-/// Clear the active buffer
-pub fn clear_buffer() {
-    if let Some(framebuffer) = FRAMEBUFFER.get() {
-        let mut fb = framebuffer.lock();
-        fb.clear();
-    }
-}
-
-/// Get screen dimensions
-pub fn get_screen_size() -> Option<(usize, usize)> {
-    if let Some(framebuffer) = FRAMEBUFFER.get() {
-        let fb = framebuffer.lock();
-        Some(fb.size())
-    } else {
-        None
-    }
 }

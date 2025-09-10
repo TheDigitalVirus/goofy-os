@@ -1,8 +1,8 @@
 use x86_64::{
     PhysAddr, VirtAddr,
     structures::paging::{
-        FrameAllocator, Mapper, OffsetPageTable, PageTable, PageTableFlags, PhysFrame, Size4KiB,
-        mapper::MapToError,
+        FrameAllocator, Mapper, OffsetPageTable, PageTable, PageTableFlags, PhysFrame, Size2MiB,
+        Size4KiB, mapper::MapToError,
     },
 };
 
@@ -102,6 +102,71 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     }
 }
 
+unsafe impl FrameAllocator<Size2MiB> for BootInfoFrameAllocator {
+    fn allocate_frame(&mut self) -> Option<PhysFrame<Size2MiB>> {
+        // Find an aligned 2MiB frame by skipping to next aligned frame
+        let frame_size = 0x200000; // 2MiB in bytes
+
+        // Store the starting next value to avoid borrowing issues
+        let original_next = self.next;
+
+        // Manually iterate through usable frames to find a suitable 2MiB aligned region
+        let mut current_index = 0;
+        let mut found_frame: Option<PhysFrame> = None;
+        let mut found_index = 0;
+
+        for frame in self.usable_frames() {
+            if current_index < original_next {
+                current_index += 1;
+                continue;
+            }
+
+            let addr = frame.start_address().as_u64();
+
+            // Check if this frame is 2MiB aligned
+            if addr % frame_size == 0 {
+                // Check if we have enough consecutive frames available
+                // We need 512 consecutive 4KiB frames (512 * 4KiB = 2MiB)
+                let mut frames_available = 0;
+                let mut check_index = 0;
+
+                // Check consecutive frames starting from current position
+                for frame_check in self.usable_frames().skip(current_index) {
+                    let check_addr = frame_check.start_address().as_u64();
+                    let expected_addr = addr + (check_index * 4096);
+
+                    if check_addr == expected_addr {
+                        frames_available += 1;
+                        check_index += 1;
+                        if frames_available >= 512 {
+                            break;
+                        }
+                    } else {
+                        break; // Non-consecutive frame found
+                    }
+                }
+
+                if frames_available >= 512 {
+                    found_frame = Some(frame);
+                    found_index = current_index;
+                    break;
+                }
+            }
+            current_index += 1;
+        }
+
+        if let Some(frame) = found_frame {
+            // Reserve all 512 frames by advancing next pointer
+            self.next = found_index + 512;
+            let addr = frame.start_address().as_u64();
+            serial_println!("2MiB frame allocated at address 0x{:x}", addr);
+            return Some(PhysFrame::containing_address(PhysAddr::new(addr)));
+        }
+
+        serial_println!("2MiB frame allocation failed - no suitable aligned region found");
+        None
+    }
+}
 #[derive(Clone, Copy)]
 pub struct ProcessAddressSpace {
     pub page_table_frame: PhysFrame<Size4KiB>,

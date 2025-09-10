@@ -630,6 +630,8 @@ pub fn run_desktop() -> ! {
                     fb_lock.draw_mouse_cursor(mouse_state.x as usize, mouse_state.y as usize);
                     mouse_state.has_moved = false;
                 }
+
+                fb_lock.present_backbuffer_dirty();
             } else {
                 serial_println!("Framebuffer not initialized");
             }

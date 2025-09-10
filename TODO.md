@@ -9,6 +9,12 @@
  - [x] MAKE WINDOWS FOCUSABLE
  - [ ] Make windows minimizable
  - [x] Mark windows as dirty when focused and unfocused
+ - [ ] Snake game
+ - [ ] Terminal
+ - [x] BACKBUFFER
+   - [ ] Cleanup backbuffer code
+   - [ ] Make backbuffer optional (config)
+   - [ ] Test performance impact of backbuffer
  - [ ] FS
    - [x] Explorer
      - [x] Display apps to open file

@@ -40,7 +40,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("Booting goofy OS...");
 
     let frame = boot_info.framebuffer.as_mut().unwrap();
-    kernel::framebuffer::init(frame);
 
     // Enable syscalls
     unsafe {
@@ -63,6 +62,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let mut frame_allocator = unsafe { BootInfoFrameAllocator::init(&boot_info.memory_regions) };
 
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
+
+    kernel::framebuffer::init(frame, &mut mapper, &mut frame_allocator);
 
     #[cfg(processes_enabled)]
     {

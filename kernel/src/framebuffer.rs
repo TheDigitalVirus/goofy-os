@@ -1,12 +1,20 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use bootloader_api::info::{FrameBuffer, FrameBufferInfo, PixelFormat};
 use conquer_once::spin::OnceCell;
-use core::{fmt, ptr};
+use core::{fmt, slice};
 use font_constants::BACKUP_CHAR;
 use noto_sans_mono_bitmap::{
     FontWeight, RasterHeight, RasterizedChar, get_raster, get_raster_width,
 };
 use spinning_top::Spinlock;
+use x86_64::{
+    VirtAddr,
+    structures::paging::{
+        FrameAllocator, Mapper, Page, PageTableFlags, PhysFrame, Size2MiB, Size4KiB,
+        mapper::MapToError,
+    },
+};
 
 use crate::serial_println;
 
@@ -92,6 +100,105 @@ const CURSOR_COLOR: Color = Color::BLUE;
 
 const TEXT_COLOR: Color = Color::new(255, 255, 150);
 
+/// Tile size for dirty rectangle tracking
+const TILE_SIZE: usize = 20;
+
+/// Dirty rectangle tracking for efficient rendering
+pub struct DirtyTracker {
+    tiles_width: usize,
+    tiles_height: usize,
+    dirty_tiles: Vec<bool>,
+    screen_width: usize,
+    screen_height: usize,
+}
+
+impl DirtyTracker {
+    pub fn new(screen_width: usize, screen_height: usize) -> Self {
+        let tiles_width = (screen_width + TILE_SIZE - 1) / TILE_SIZE;
+        let tiles_height = (screen_height + TILE_SIZE - 1) / TILE_SIZE;
+        let total_tiles = tiles_width * tiles_height;
+
+        serial_println!(
+            "Framebuffer initialized with {}x{} tiles",
+            tiles_width,
+            tiles_height
+        );
+
+        Self {
+            tiles_width,
+            tiles_height,
+            dirty_tiles: vec![false; total_tiles],
+            screen_width,
+            screen_height,
+        }
+    }
+
+    /// Mark a pixel region as dirty
+    pub fn mark_dirty(&mut self, x: usize, y: usize, width: usize, height: usize) {
+        let start_tile_x = x / TILE_SIZE;
+        let start_tile_y = y / TILE_SIZE;
+        let end_tile_x = ((x + width).min(self.screen_width) + TILE_SIZE - 1) / TILE_SIZE;
+        let end_tile_y = ((y + height).min(self.screen_height) + TILE_SIZE - 1) / TILE_SIZE;
+
+        for tile_y in start_tile_y..end_tile_y.min(self.tiles_height) {
+            for tile_x in start_tile_x..end_tile_x.min(self.tiles_width) {
+                let tile_index = tile_y * self.tiles_width + tile_x;
+                if tile_index < self.dirty_tiles.len() {
+                    self.dirty_tiles[tile_index] = true;
+                }
+            }
+        }
+    }
+
+    /// Mark a single pixel as dirty
+    pub fn mark_pixel_dirty(&mut self, x: usize, y: usize) {
+        if x >= self.screen_width || y >= self.screen_height {
+            return;
+        }
+
+        let tile_x = x / TILE_SIZE;
+        let tile_y = y / TILE_SIZE;
+        let tile_index = tile_y * self.tiles_width + tile_x;
+
+        if tile_index < self.dirty_tiles.len() {
+            self.dirty_tiles[tile_index] = true;
+        }
+    }
+
+    /// Get all dirty tile regions and clear them
+    pub fn get_dirty_regions(&mut self) -> Vec<(u8, u8)> {
+        let mut regions = Vec::new();
+
+        for tile_y in 0..self.tiles_height {
+            for tile_x in 0..self.tiles_width {
+                let tile_index = tile_y * self.tiles_width + tile_x;
+                if tile_index < self.dirty_tiles.len() && self.dirty_tiles[tile_index] {
+                    regions.push((tile_x as u8, tile_y as u8));
+
+                    self.dirty_tiles[tile_index] = false; // Clear the dirty flag
+                }
+            }
+        }
+
+        regions
+    }
+
+    /// Mark all tiles as dirty (force full redraw)
+    pub fn mark_all_dirty(&mut self) {
+        self.dirty_tiles.fill(true);
+    }
+
+    /// Clear all dirty flags without returning regions
+    pub fn clear_all_dirty(&mut self) {
+        self.dirty_tiles.fill(false);
+    }
+
+    /// Check if any tiles are dirty
+    pub fn has_dirty_tiles(&self) -> bool {
+        self.dirty_tiles.iter().any(|&dirty| dirty)
+    }
+}
+
 /// Constants for the usage of the [`noto_sans_mono_bitmap`] crate.
 mod font_constants {
     use super::*;
@@ -165,8 +272,141 @@ impl Color {
     }
 }
 
+/// BackBuffer using 2MiB memory pages for efficient double buffering
+pub struct BackBuffer {
+    buffer: &'static mut [u8],
+    frames: Vec<PhysFrame<Size2MiB>>,
+    info: FrameBufferInfo,
+    virtual_addr: VirtAddr,
+    total_size: usize,
+}
+
+impl BackBuffer {
+    /// Create a new backbuffer using 2MiB pages
+    pub fn new(
+        info: FrameBufferInfo,
+        mapper: &mut impl Mapper<Size2MiB>,
+        frame_allocator: &mut (impl FrameAllocator<Size2MiB> + FrameAllocator<Size4KiB>),
+    ) -> Result<Self, MapToError<Size2MiB>> {
+        // Calculate required buffer size
+        let buffer_size = info.height * info.stride * info.bytes_per_pixel;
+        serial_println!("BackBuffer: Required size {} bytes", buffer_size);
+
+        // Calculate how many 2MiB pages we need
+        const PAGE_SIZE_2MIB: usize = 2 * 1024 * 1024;
+        let num_pages = (buffer_size + PAGE_SIZE_2MIB - 1) / PAGE_SIZE_2MIB; // Round up
+        let total_allocated_size = num_pages * PAGE_SIZE_2MIB;
+
+        serial_println!("BackBuffer: Need {} pages of 2MiB each", num_pages);
+
+        // Allocate multiple 2MiB frames
+        let mut frames = Vec::new();
+        for i in 0..num_pages {
+            let frame = frame_allocator
+                .allocate_frame()
+                .ok_or(MapToError::FrameAllocationFailed)?;
+
+            serial_println!(
+                "BackBuffer: Allocated 2MiB frame {} at {:?}",
+                i,
+                frame.start_address()
+            );
+            frames.push(frame);
+        }
+
+        // Use a high virtual address space for backbuffer (avoid conflicts)
+        let virtual_addr = VirtAddr::new(0xFFFF_8000_0000_0000u64);
+        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+
+        // Map all frames to consecutive virtual pages
+        for (i, frame) in frames.iter().enumerate() {
+            let page_addr = virtual_addr + (i * PAGE_SIZE_2MIB) as u64;
+            let page = Page::<Size2MiB>::containing_address(page_addr);
+
+            unsafe {
+                mapper.map_to(page, *frame, flags, frame_allocator)?.flush();
+            }
+
+            serial_println!(
+                "BackBuffer: Mapped frame {} to virtual address {:?}",
+                i,
+                page_addr
+            );
+        }
+
+        // Create a slice over the mapped memory
+        let buffer = unsafe {
+            slice::from_raw_parts_mut(virtual_addr.as_mut_ptr::<u8>(), total_allocated_size)
+        };
+
+        // Clear the buffer
+        buffer.fill(0);
+
+        serial_println!(
+            "BackBuffer: Successfully created at virtual address {:?} with {} bytes",
+            virtual_addr,
+            total_allocated_size
+        );
+
+        Ok(BackBuffer {
+            buffer,
+            frames,
+            info,
+            virtual_addr,
+            total_size: total_allocated_size,
+        })
+    }
+
+    /// Get a mutable slice to the buffer
+    pub fn buffer_mut(&mut self) -> &mut [u8] {
+        // Only return the actual framebuffer size, not the full allocated size
+        let actual_size = self.info.height * self.info.stride * self.info.bytes_per_pixel;
+        let actual_size = actual_size.min(self.total_size);
+        &mut self.buffer[..actual_size]
+    }
+
+    /// Get an immutable slice to the buffer
+    pub fn buffer(&self) -> &[u8] {
+        let actual_size = self.info.height * self.info.stride * self.info.bytes_per_pixel;
+        let actual_size = actual_size.min(self.total_size);
+        &self.buffer[..actual_size]
+    }
+
+    /// Get buffer info
+    pub fn info(&self) -> &FrameBufferInfo {
+        &self.info
+    }
+
+    /// Clear the backbuffer
+    pub fn clear(&mut self) {
+        self.buffer_mut().fill(0);
+    }
+
+    /// Copy from another buffer to this backbuffer
+    pub fn copy_from(&mut self, src: &[u8]) {
+        let dst = self.buffer_mut();
+        let copy_size = src.len().min(dst.len());
+        dst[..copy_size].copy_from_slice(&src[..copy_size]);
+    }
+
+    /// Get the physical frames for this backbuffer
+    pub fn frames(&self) -> &[PhysFrame<Size2MiB>] {
+        &self.frames
+    }
+
+    /// Get the first physical frame for this backbuffer (for compatibility)
+    pub fn frame(&self) -> PhysFrame<Size2MiB> {
+        self.frames[0]
+    }
+
+    /// Get the virtual address of this backbuffer
+    pub fn virtual_addr(&self) -> VirtAddr {
+        self.virtual_addr
+    }
+}
+
 struct CursorBackground {
-    saved_pixels: [u8; CURSOR_BG_DATA_SIZE * 4], // TODO: Don't hardcode this
+    saved_pixels: [u8; CURSOR_BG_DATA_SIZE * 4],
     previous_pos: Option<(usize, usize)>,
 }
 
@@ -191,17 +431,27 @@ pub struct FrameBufferWriter {
     x_pos: usize,
     y_pos: usize,
     cursor_background: CursorBackground,
+    backbuffer: BackBuffer,
+    dirty_tracker: DirtyTracker,
 }
 
 impl FrameBufferWriter {
     /// Creates a new logger that uses the given framebuffer.
-    pub fn new(framebuffer: &'static mut [u8], info: FrameBufferInfo) -> Self {
+    pub fn new(
+        framebuffer: &'static mut [u8],
+        info: FrameBufferInfo,
+        frame_allocator: &mut (impl FrameAllocator<Size2MiB> + FrameAllocator<Size4KiB>),
+        mapper: &mut impl Mapper<Size2MiB>,
+    ) -> Self {
         let mut logger = Self {
             framebuffer,
             info,
             x_pos: 0,
             y_pos: 0,
             cursor_background: CursorBackground::new(info.bytes_per_pixel),
+            backbuffer: BackBuffer::new(info, mapper, frame_allocator)
+                .expect("Failed to create backbuffer"),
+            dirty_tracker: DirtyTracker::new(info.width, info.height),
         };
 
         logger.clear();
@@ -218,14 +468,21 @@ impl FrameBufferWriter {
     }
 
     pub fn fill(&mut self, brightness: u8) {
-        self.framebuffer.fill(brightness);
+        // Mark all tiles as dirty since we're filling the entire buffer
+        self.dirty_tracker.mark_all_dirty();
+
+        self.backbuffer.buffer_mut().fill(brightness);
     }
 
     /// Erases all text on the screen. Resets `self.x_pos` and `self.y_pos`.
     pub fn clear(&mut self) {
         self.x_pos = BORDER_PADDING;
         self.y_pos = BORDER_PADDING;
-        self.framebuffer.fill(0);
+
+        // Mark all tiles as dirty since we're clearing the entire buffer
+        self.dirty_tracker.mark_all_dirty();
+
+        self.backbuffer.clear();
     }
 
     fn width(&self) -> usize {
@@ -311,6 +568,9 @@ impl FrameBufferWriter {
             return; // Out of bounds
         }
 
+        // Mark tile as dirty
+        self.dirty_tracker.mark_pixel_dirty(x, y);
+
         let pixel_offset = y * self.info.stride + x;
         let color = match self.info.pixel_format {
             PixelFormat::Rgb => [color.r, color.g, color.b, 0],
@@ -326,9 +586,12 @@ impl FrameBufferWriter {
 
         let bytes_per_pixel = self.info.bytes_per_pixel;
         let byte_offset = pixel_offset * bytes_per_pixel;
-        self.framebuffer[byte_offset..(byte_offset + bytes_per_pixel)]
-            .copy_from_slice(&color[..bytes_per_pixel]);
-        let _ = unsafe { ptr::read_volatile(&self.framebuffer[byte_offset]) };
+
+        let bb_slice = self.backbuffer.buffer_mut();
+        if byte_offset + bytes_per_pixel <= bb_slice.len() {
+            bb_slice[byte_offset..(byte_offset + bytes_per_pixel)]
+                .copy_from_slice(&color[..bytes_per_pixel]);
+        }
     }
 
     pub fn read_pixel(&self, x: usize, y: usize) -> Color {
@@ -340,18 +603,22 @@ impl FrameBufferWriter {
         let bytes_per_pixel = self.info.bytes_per_pixel;
         let byte_offset = pixel_offset * bytes_per_pixel;
 
-        let bytes = &self.framebuffer[byte_offset..(byte_offset + bytes_per_pixel)];
-
-        match self.info.pixel_format {
-            PixelFormat::Rgb => Color::new(bytes[0], bytes[1], bytes[2]),
-            PixelFormat::Bgr => Color::new(bytes[2], bytes[1], bytes[0]),
-            PixelFormat::U8 => {
-                let intensity = if bytes[0] > 0 { 255 } else { 0 };
-                Color::new(intensity, intensity, intensity)
-            }
-            other => {
-                panic!("pixel format {:?} not supported for reading", other)
-            }
+        let bb_slice = self.backbuffer.buffer();
+        if byte_offset + bytes_per_pixel <= bb_slice.len() {
+            let bytes = &bb_slice[byte_offset..(byte_offset + bytes_per_pixel)];
+            return match self.info.pixel_format {
+                PixelFormat::Rgb => Color::new(bytes[0], bytes[1], bytes[2]),
+                PixelFormat::Bgr => Color::new(bytes[2], bytes[1], bytes[0]),
+                PixelFormat::U8 => {
+                    let intensity = if bytes[0] > 0 { 255 } else { 0 };
+                    Color::new(intensity, intensity, intensity)
+                }
+                other => {
+                    panic!("pixel format {:?} not supported for reading", other)
+                }
+            };
+        } else {
+            return Color::BLACK; // Out of bounds, return black
         }
     }
 
@@ -363,33 +630,60 @@ impl FrameBufferWriter {
         let max_width = (self.width() - x).min(data.len() / self.info.bytes_per_pixel);
         let bytes_per_pixel = self.info.bytes_per_pixel;
         let start_offset = (y * self.info.stride + x) * bytes_per_pixel;
+        let copy_size = max_width * bytes_per_pixel;
 
-        self.framebuffer[start_offset..start_offset + max_width * bytes_per_pixel]
-            .copy_from_slice(&data[..max_width * bytes_per_pixel]);
+        // Mark affected region as dirty
+        if max_width > 0 {
+            self.dirty_tracker.mark_dirty(x, y, max_width, 1);
+        }
+
+        let bb_slice = self.backbuffer.buffer_mut();
+        if start_offset + copy_size <= bb_slice.len() {
+            bb_slice[start_offset..start_offset + copy_size].copy_from_slice(&data[..copy_size]);
+        }
     }
 
     /// Read a horizontal line of pixels at once
-    pub fn read_raw_pixel_row(&self, x: usize, y: usize, count: usize) -> &[u8] {
+    /// Note: Returns a temporary buffer when reading from backbuffer
+    pub fn read_raw_pixel_row(&self, x: usize, y: usize, count: usize) -> Vec<u8> {
         if y >= self.height() || x >= self.width() {
-            return &[];
+            return Vec::new();
         }
 
         let max_width = (self.width() - x).min(count);
         let bytes_per_pixel = self.info.bytes_per_pixel;
         let start_offset = (y * self.info.stride + x) * bytes_per_pixel;
+        let data_size = max_width * bytes_per_pixel;
 
-        let data = self
-            .framebuffer
-            .get(start_offset..start_offset + max_width * bytes_per_pixel)
-            .unwrap_or(&[]);
+        let bb_slice = self.backbuffer.buffer();
+        if start_offset + data_size <= bb_slice.len() {
+            return bb_slice[start_offset..start_offset + data_size].to_vec();
+        }
 
-        data
+        return Vec::new();
     }
 
     pub fn draw_mouse_cursor(&mut self, x: usize, y: usize) {
+        // Mark previous cursor position as dirty if it exists
         if let Some(prev_pos) = self.cursor_background.previous_pos {
+            let prev_bounds = Self::get_cursor_bounds(prev_pos.0, prev_pos.1);
+            self.dirty_tracker.mark_dirty(
+                prev_bounds.0,
+                prev_bounds.1,
+                prev_bounds.2,
+                prev_bounds.3,
+            );
             self.restore_cursor_background(prev_pos);
         }
+
+        // Mark new cursor position as dirty
+        let cursor_bounds = Self::get_cursor_bounds(x, y);
+        self.dirty_tracker.mark_dirty(
+            cursor_bounds.0,
+            cursor_bounds.1,
+            cursor_bounds.2,
+            cursor_bounds.3,
+        );
 
         self.save_cursor_background(x, y);
         self.draw_cursor(x, y);
@@ -459,21 +753,43 @@ impl FrameBufferWriter {
             let bytes_per_pixel = self.info.bytes_per_pixel;
 
             if cursor_y < 0 || cursor_y >= self.height() as isize {
-                continue; // Skip out-of-bounds rows
+                // Fill with zeros for out-of-bounds pixels
+                let size = count * bytes_per_pixel;
+                if idx + size <= self.cursor_background.saved_pixels.len() {
+                    self.cursor_background.saved_pixels[idx..idx + size].fill(0);
+                    idx += size;
+                }
+                continue;
             }
 
-            let row = if start_x < 0 || start_x > self.width() as isize {
-                // Just black
-                alloc::vec![0; count * bytes_per_pixel]
-            } else {
-                self.read_raw_pixel_row(start_x as usize, cursor_y as usize, count)
-                    .to_vec()
-            };
+            if start_x < 0 || start_x > self.width() as isize {
+                // Fill with zeros for out-of-bounds pixels
+                let size = count * bytes_per_pixel;
+                if idx + size <= self.cursor_background.saved_pixels.len() {
+                    self.cursor_background.saved_pixels[idx..idx + size].fill(0);
+                    idx += size;
+                }
+                continue;
+            }
 
-            self.cursor_background.saved_pixels[idx..idx + count * bytes_per_pixel]
-                .copy_from_slice(&row);
+            // Read from active buffer (backbuffer or framebuffer)
+            let copy_size = count * bytes_per_pixel;
 
-            idx += count * bytes_per_pixel;
+            if idx + copy_size <= self.cursor_background.saved_pixels.len() {
+                // Calculate the pixel offset directly to avoid borrow checker issues
+                let pixel_offset = cursor_y as usize * self.info.stride + start_x as usize;
+                let byte_offset = pixel_offset * self.info.bytes_per_pixel;
+                let max_bytes = (self.width() - start_x as usize) * self.info.bytes_per_pixel;
+                let actual_copy_size = copy_size.min(max_bytes);
+
+                let bb_slice = self.backbuffer.buffer();
+                if byte_offset + actual_copy_size <= bb_slice.len() {
+                    self.cursor_background.saved_pixels[idx..idx + actual_copy_size]
+                        .copy_from_slice(&bb_slice[byte_offset..byte_offset + actual_copy_size]);
+                }
+
+                idx += copy_size;
+            }
         }
     }
 
@@ -493,17 +809,28 @@ impl FrameBufferWriter {
             let bytes_per_pixel = self.info.bytes_per_pixel;
 
             if cursor_y < 0 || cursor_y >= self.height() as isize {
+                idx += count * bytes_per_pixel; // Skip the data but advance index
                 continue; // Skip out-of-bounds rows
             }
             if start_x < 0 || start_x + count as isize > self.width() as isize {
+                idx += count * bytes_per_pixel; // Skip the data but advance index
                 continue;
             }
 
-            let row =
-                &self.cursor_background.saved_pixels[idx..idx + count * bytes_per_pixel].to_vec();
+            let size = count * bytes_per_pixel;
+            if idx + size <= self.cursor_background.saved_pixels.len() {
+                // Calculate the pixel offset
+                let pixel_offset = cursor_y as usize * self.info.stride + start_x as usize;
+                let byte_offset = pixel_offset * self.info.bytes_per_pixel;
 
-            self.write_raw_pixel_row(start_x as usize, cursor_y as usize, &row);
-            idx += count * bytes_per_pixel;
+                let bb_slice = self.backbuffer.buffer_mut();
+                if byte_offset + size <= bb_slice.len() {
+                    bb_slice[byte_offset..byte_offset + size]
+                        .copy_from_slice(&self.cursor_background.saved_pixels[idx..idx + size]);
+                }
+
+                idx += size;
+            }
         }
     }
 
@@ -552,8 +879,12 @@ impl FrameBufferWriter {
             .take(max_width * bytes_per_pixel)
             .collect();
 
-        self.framebuffer[start_offset..start_offset + max_width * bytes_per_pixel]
-            .copy_from_slice(&data);
+        let bb_slice = self.backbuffer.buffer_mut();
+        if start_offset + max_width * bytes_per_pixel <= bb_slice.len() {
+            bb_slice[start_offset..start_offset + max_width * bytes_per_pixel]
+                .copy_from_slice(&data);
+            return;
+        }
     }
 
     pub fn draw_rect(
@@ -562,6 +893,11 @@ impl FrameBufferWriter {
         bottom_right: (usize, usize),
         color: Color,
     ) {
+        let width = bottom_right.0 - top_left.0 + 1;
+        let height = bottom_right.1 - top_left.1 + 1;
+        self.dirty_tracker
+            .mark_dirty(top_left.0, top_left.1, width, height);
+
         for y in top_left.1..=bottom_right.1 {
             self.write_pixel_row(top_left.0, bottom_right.0, y, &color);
         }
@@ -573,6 +909,11 @@ impl FrameBufferWriter {
         bottom_right: (usize, usize),
         color: Color,
     ) {
+        let width = bottom_right.0 - top_left.0 + 1;
+        let height = bottom_right.1 - top_left.1 + 1;
+        self.dirty_tracker
+            .mark_dirty(top_left.0, top_left.1, width, height);
+
         self.write_pixel_row(top_left.0, bottom_right.0, top_left.1, &color);
         self.write_pixel_row(top_left.0, bottom_right.0, bottom_right.1, &color);
 
@@ -616,10 +957,103 @@ impl FrameBufferWriter {
             x_offset += LETTER_SPACING + rendered_char.width(); // Move to the next character position
         }
     }
+
+    /// Present the backbuffer to the screen (swap buffers)
+    pub fn present_backbuffer(&mut self) {
+        let bb_data = self.backbuffer.buffer();
+        let copy_size = bb_data.len().min(self.framebuffer.len());
+        self.framebuffer[..copy_size].copy_from_slice(&bb_data[..copy_size]);
+    }
+
+    /// Present only dirty regions of the backbuffer to the screen (optimized)
+    pub fn present_backbuffer_dirty(&mut self) -> usize {
+        let dirty_regions = self.dirty_tracker.get_dirty_regions();
+        let regions_count = dirty_regions.len();
+
+        if regions_count == 0 {
+            return 0; // Nothing to update
+        }
+
+        let bb_data = self.backbuffer.buffer();
+        let bytes_per_pixel = self.info.bytes_per_pixel;
+        let stride = self.info.stride;
+
+        // Copy only dirty regions
+        for (x, y) in dirty_regions {
+            let x = x as usize * TILE_SIZE;
+            let y = y as usize * TILE_SIZE;
+            let width = TILE_SIZE.min(self.info.width - x);
+            let height = TILE_SIZE.min(self.info.height - y);
+
+            for row in y..(y + height) {
+                if row >= self.info.height {
+                    break;
+                }
+
+                let fb_start = (row * stride + x) * bytes_per_pixel;
+                let fb_end = fb_start + (width * bytes_per_pixel);
+
+                if fb_end <= self.framebuffer.len() && fb_end <= bb_data.len() {
+                    self.framebuffer[fb_start..fb_end].copy_from_slice(&bb_data[fb_start..fb_end]);
+                }
+            }
+        }
+
+        regions_count
+    }
+
+    /// Clear the backbuffer
+    pub fn clear_backbuffer(&mut self) {
+        self.backbuffer.clear();
+    }
+
+    /// Copy entire framebuffer contents to backbuffer
+    pub fn copy_to_backbuffer(&mut self) {
+        self.backbuffer.copy_from(self.framebuffer);
+    }
+
+    /// Copy entire backbuffer contents to framebuffer
+    pub fn copy_from_backbuffer(&mut self) {
+        let bb_data = self.backbuffer.buffer();
+        let copy_size = bb_data.len().min(self.framebuffer.len());
+        self.framebuffer[..copy_size].copy_from_slice(&bb_data[..copy_size]);
+    }
+
+    /// Get buffer info
+    pub fn get_info(&self) -> FrameBufferInfo {
+        self.info
+    }
+
+    /// Mark a region as dirty for optimized rendering
+    pub fn mark_dirty_region(&mut self, x: usize, y: usize, width: usize, height: usize) {
+        self.dirty_tracker.mark_dirty(x, y, width, height);
+    }
+
+    /// Mark the entire screen as dirty
+    pub fn mark_all_dirty(&mut self) {
+        self.dirty_tracker.mark_all_dirty();
+    }
+
+    /// Check if there are any dirty regions
+    pub fn has_dirty_regions(&self) -> bool {
+        self.dirty_tracker.has_dirty_tiles()
+    }
+
+    /// Get the number of dirty tiles (for debugging/profiling)
+    pub fn get_dirty_tile_count(&self) -> usize {
+        self.dirty_tracker
+            .dirty_tiles
+            .iter()
+            .filter(|&&dirty| dirty)
+            .count()
+    }
 }
 
 unsafe impl Send for FrameBufferWriter {}
 unsafe impl Sync for FrameBufferWriter {}
+
+unsafe impl Send for BackBuffer {}
+unsafe impl Sync for BackBuffer {}
 
 impl fmt::Write for FrameBufferWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -630,7 +1064,11 @@ impl fmt::Write for FrameBufferWriter {
     }
 }
 
-pub fn init(frame: &'static mut FrameBuffer) {
+pub fn init(
+    frame: &'static mut FrameBuffer,
+    mapper: &mut impl Mapper<Size2MiB>,
+    frame_allocator: &mut (impl FrameAllocator<Size2MiB> + FrameAllocator<Size4KiB>),
+) {
     SCREEN_SIZE.init_once(|| {
         let info = frame.info();
         (info.width as u16, info.height as u16)
@@ -640,8 +1078,57 @@ pub fn init(frame: &'static mut FrameBuffer) {
         let info = frame.info();
         let buffer = frame.buffer_mut();
 
-        spinning_top::Spinlock::new(FrameBufferWriter::new(buffer, info))
+        spinning_top::Spinlock::new(FrameBufferWriter::new(
+            buffer,
+            info,
+            frame_allocator,
+            mapper,
+        ))
     });
+}
+
+/// Present the backbuffer to the screen
+pub fn present() {
+    if let Some(framebuffer) = FRAMEBUFFER.get() {
+        let mut fb = framebuffer.lock();
+        fb.present_backbuffer();
+    }
+}
+
+/// Present only dirty regions of the backbuffer to the screen (optimized)
+pub fn present_dirty() -> usize {
+    if let Some(framebuffer) = FRAMEBUFFER.get() {
+        let mut fb = framebuffer.lock();
+        fb.present_backbuffer_dirty()
+    } else {
+        0
+    }
+}
+
+/// Mark a region as dirty for optimized rendering
+pub fn mark_dirty_region(x: usize, y: usize, width: usize, height: usize) {
+    if let Some(framebuffer) = FRAMEBUFFER.get() {
+        let mut fb = framebuffer.lock();
+        fb.mark_dirty_region(x, y, width, height);
+    }
+}
+
+/// Check if there are dirty regions that need updating
+pub fn has_dirty_regions() -> bool {
+    if let Some(framebuffer) = FRAMEBUFFER.get() {
+        let fb = framebuffer.lock();
+        fb.has_dirty_regions()
+    } else {
+        false
+    }
+}
+
+/// Clear the backbuffer
+pub fn clear_backbuffer() {
+    if let Some(framebuffer) = FRAMEBUFFER.get() {
+        let mut fb = framebuffer.lock();
+        fb.clear_backbuffer();
+    }
 }
 
 pub fn set_buffer(buffer: &[u8]) {
@@ -649,5 +1136,67 @@ pub fn set_buffer(buffer: &[u8]) {
         fb.lock().framebuffer.copy_from_slice(buffer);
     } else {
         panic!("FrameBuffer not initialized");
+    }
+}
+
+/// Read a pixel from the active buffer (backbuffer if enabled, framebuffer otherwise)
+pub fn read_pixel(x: usize, y: usize) -> Option<Color> {
+    if let Some(framebuffer) = FRAMEBUFFER.get() {
+        let fb = framebuffer.lock();
+        Some(fb.read_pixel(x, y))
+    } else {
+        None
+    }
+}
+
+/// Write a pixel to the active buffer (backbuffer if enabled, framebuffer otherwise)
+pub fn write_pixel(x: usize, y: usize, color: Color) {
+    if let Some(framebuffer) = FRAMEBUFFER.get() {
+        let mut fb = framebuffer.lock();
+        fb.write_pixel(x, y, color);
+    }
+}
+
+/// Read a row of pixels from the active buffer
+pub fn read_pixel_row(x: usize, y: usize, count: usize) -> Vec<u8> {
+    if let Some(framebuffer) = FRAMEBUFFER.get() {
+        let fb = framebuffer.lock();
+        fb.read_raw_pixel_row(x, y, count)
+    } else {
+        Vec::new()
+    }
+}
+
+/// Write a row of pixels to the active buffer
+pub fn write_pixel_row(x: usize, y: usize, data: &[u8]) {
+    if let Some(framebuffer) = FRAMEBUFFER.get() {
+        let mut fb = framebuffer.lock();
+        fb.write_raw_pixel_row(x, y, data);
+    }
+}
+
+/// Fill the active buffer with a single brightness value
+pub fn fill_buffer(brightness: u8) {
+    if let Some(framebuffer) = FRAMEBUFFER.get() {
+        let mut fb = framebuffer.lock();
+        fb.fill(brightness);
+    }
+}
+
+/// Clear the active buffer
+pub fn clear_buffer() {
+    if let Some(framebuffer) = FRAMEBUFFER.get() {
+        let mut fb = framebuffer.lock();
+        fb.clear();
+    }
+}
+
+/// Get screen dimensions
+pub fn get_screen_size() -> Option<(usize, usize)> {
+    if let Some(framebuffer) = FRAMEBUFFER.get() {
+        let fb = framebuffer.lock();
+        Some(fb.size())
+    } else {
+        None
     }
 }

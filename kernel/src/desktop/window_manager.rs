@@ -480,7 +480,9 @@ impl WindowManager {
         }
 
         // Check for clicks on window areas
-        for window in &mut self.windows {
+        for &window_id in self.window_order.iter().rev() {
+            let window = self.windows.iter_mut().find(|w| w.id == window_id).unwrap();
+
             // Check for clicks on title bar (for focusing)
             if x as usize >= window.x - 1
                 && x as usize <= window.x + window.width

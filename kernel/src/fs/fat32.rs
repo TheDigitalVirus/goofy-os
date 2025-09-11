@@ -1447,6 +1447,92 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         Err("File not found in directory")
     }
 
+    /// Update only the last access date for a file (for read operations)
+    fn update_last_access_date(
+        &mut self,
+        dir_cluster: u32,
+        filename: &str,
+    ) -> Result<(), &'static str> {
+        let cluster_size = (self.sectors_per_cluster * self.bytes_per_sector) as usize;
+        let entries_per_cluster = cluster_size / mem::size_of::<DirectoryEntry>();
+        let mut current_cluster = dir_cluster;
+
+        loop {
+            let mut cluster_buffer = vec![0u8; cluster_size];
+            self.read_cluster(current_cluster, &mut cluster_buffer)?;
+
+            let mut lfn_entries: Vec<LongFilenameEntry> = Vec::new();
+
+            for i in 0..entries_per_cluster {
+                let entry_offset = i * mem::size_of::<DirectoryEntry>();
+                let entry = unsafe {
+                    *(cluster_buffer.as_ptr().add(entry_offset) as *const DirectoryEntry)
+                };
+
+                if entry.name[0] == 0x00 {
+                    return Err("File not found in directory");
+                }
+
+                // Skip deleted entries
+                if entry.name[0] == 0xE5 {
+                    lfn_entries.clear(); // Clear any partial LFN sequence
+                    continue;
+                }
+
+                // Check if this is a long filename entry
+                if entry.attributes == attributes::LONG_NAME {
+                    let lfn_entry = unsafe {
+                        *(cluster_buffer.as_ptr().add(entry_offset) as *const LongFilenameEntry)
+                    };
+                    lfn_entries.push(lfn_entry);
+                    continue;
+                }
+
+                // This is a regular directory entry
+                let long_filename = if !lfn_entries.is_empty() {
+                    // Reconstruct long filename from LFN entries
+                    let reconstructed = self.reconstruct_long_filename(&lfn_entries, &entry)?;
+                    lfn_entries.clear();
+                    reconstructed
+                } else {
+                    None
+                };
+
+                let entry_file = self.entry_to_file_entry_with_lfn(long_filename, &entry);
+
+                if entry_file.name.to_uppercase() == filename.to_uppercase() {
+                    let now = get_utc_time(); // TODO: Use correct timezone
+
+                    // Create a mutable copy of the entry and only update last access date
+                    let mut updated_entry = entry;
+                    updated_entry.last_access_date = self.date_to_raw_date(now.to_date());
+
+                    // Write the updated entry back
+                    let entry_bytes = unsafe {
+                        core::slice::from_raw_parts(
+                            &updated_entry as *const DirectoryEntry as *const u8,
+                            mem::size_of::<DirectoryEntry>(),
+                        )
+                    };
+
+                    cluster_buffer[entry_offset..entry_offset + mem::size_of::<DirectoryEntry>()]
+                        .copy_from_slice(entry_bytes);
+
+                    self.write_cluster(current_cluster, &cluster_buffer)?;
+                    return Ok(());
+                }
+            }
+
+            let next_cluster = self.get_next_cluster(current_cluster)?;
+            if next_cluster >= cluster_values::END_OF_CHAIN {
+                break;
+            }
+            current_cluster = next_cluster;
+        }
+
+        Err("File not found in directory")
+    }
+
     /// Delete a file
     pub fn delete_file(&mut self, dir_cluster: u32, filename: &str) -> Result<(), &'static str> {
         // Find the file
@@ -1616,6 +1702,15 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
     /// Update a file in the root directory
     pub fn update_file_in_root(&mut self, filename: &str, data: &[u8]) -> Result<(), &'static str> {
         self.update_file(self.boot_sector.root_cluster, filename, data)
+    }
+
+    /// Update the last access date for a file when reading
+    pub fn update_file_last_access(
+        &mut self,
+        dir_cluster: u32,
+        filename: &str,
+    ) -> Result<(), &'static str> {
+        self.update_last_access_date(dir_cluster, filename)
     }
 
     /// Create a new directory

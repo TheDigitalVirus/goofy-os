@@ -11,11 +11,13 @@
  - [x] Mark windows as dirty when focused and unfocused
  - [ ] Snake game
  - [ ] Terminal
+ - [ ] Icons
  - [x] BACKBUFFER
    - [x] Cleanup backbuffer code
    - [x] Make backbuffer optional (config)
    - [x] Test performance impact of backbuffer
  - [ ] FS
+   - [ ] Copy, move, and rename functionality
    - [x] Explorer
      - [x] Display apps to open file
      - [x] Folders
@@ -24,7 +26,7 @@
    - [x] Long names
    - [x] Creation/update time
    - [ ] Display times in the explorer
-   - [ ] Update last access on read
+   - [x] Update last access on read
    - [x] UEFI support
    - [x] Fix UEFI somehow not detecting filesystem correctly
    - [x] Disable legacy PIC/APICs when not used

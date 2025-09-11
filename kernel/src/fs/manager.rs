@@ -166,11 +166,35 @@ pub fn read_file(path: &str) -> Result<Vec<u8>, &'static str> {
         return Err("Path points to a directory, not a file");
     }
 
-    let mut fs_guard = FILESYSTEM.lock();
-    match fs_guard.as_mut() {
-        Some(fs) => fs.read_file(file_entry.first_cluster, file_entry.size),
-        None => Err("Filesystem not initialized"),
+    let (dir_cluster, filename) = resolve_path(path)?;
+    let filename = filename.ok_or("Invalid file path")?;
+
+    let result = {
+        let mut fs_guard = FILESYSTEM.lock();
+        match fs_guard.as_mut() {
+            Some(fs) => fs.read_file(file_entry.first_cluster, file_entry.size),
+            None => return Err("Filesystem not initialized"),
+        }
+    };
+
+    // Update last access time after successful read
+    if result.is_ok() {
+        without_interrupts(|| {
+            let mut fs_guard = FILESYSTEM.lock();
+            if let Some(fs) = fs_guard.as_mut() {
+                // We ignore the error here since read operation was successful
+                // but log if there's an issue updating access time
+                if let Err(_) = fs.update_file_last_access(dir_cluster, &filename) {
+                    crate::serial_println!(
+                        "Warning: Failed to update last access time for file: {}",
+                        path
+                    );
+                }
+            }
+        });
     }
+
+    result
 }
 
 /// Read a text file and return it as a string

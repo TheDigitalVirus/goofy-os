@@ -239,8 +239,8 @@ cargo run
 
 ### Current Goals (In Progress)
 - [ ] **Enhanced File Operations**: Copy, move, and rename functionality in File Manager
-- [ ] **Window Focus Management**: Implement proper window focusing system
-- [ ] **Taskbar Window List**: Show running applications in taskbar
+- [x] **Window Focus Management**: Implement proper window focusing system
+- [x] **Taskbar Window List**: Show running applications in taskbar
 - [ ] **Notepad Improvements**: Fix text editing bugs and enhance functionality
 - [ ] **Window Drag Optimizations**: Improve cursor restoration during window dragging
 

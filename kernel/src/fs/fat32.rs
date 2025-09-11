@@ -1,6 +1,7 @@
 use crate::serial_println;
+use crate::sysinfo::FilesystemInfo;
 use crate::time::{Date, DateTime, Time, get_utc_time};
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::mem;
@@ -1845,5 +1846,47 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
     /// Check if a cluster is the root directory
     pub fn is_root_directory(&self, cluster: u32) -> bool {
         cluster == self.boot_sector.root_cluster
+    }
+
+    /// Get filesystem information for system monitoring
+    pub fn get_filesystem_info(&self) -> FilesystemInfo {
+        let boot_sector = &self.boot_sector;
+
+        // Calculate total size
+        let total_sectors = if boot_sector.total_sectors_16 != 0 {
+            boot_sector.total_sectors_16 as u64
+        } else {
+            boot_sector.total_sectors_32 as u64
+        };
+        let total_size = total_sectors * boot_sector.bytes_per_sector as u64;
+
+        // Calculate cluster information
+        let fat_size = boot_sector.sectors_per_fat_32 as u64;
+        let data_start_sector =
+            boot_sector.reserved_sectors as u64 + (boot_sector.fat_count as u64 * fat_size);
+        let data_sectors = total_sectors - data_start_sector;
+        let total_clusters = (data_sectors / boot_sector.sectors_per_cluster as u64) as u32;
+
+        // Extract volume label from boot sector
+        let volume_label = core::str::from_utf8(&boot_sector.volume_label)
+            .unwrap_or("Unknown")
+            .trim()
+            .to_string();
+
+        FilesystemInfo {
+            filesystem_type: "FAT32".to_string(),
+            total_size,
+            bytes_per_sector: boot_sector.bytes_per_sector,
+            sectors_per_cluster: boot_sector.sectors_per_cluster,
+            total_clusters,
+            volume_label: if volume_label.is_empty() || volume_label.chars().all(|c| c == ' ') {
+                "NO NAME".to_string()
+            } else {
+                volume_label
+            },
+            root_entries: boot_sector.root_dir_entries as u32,
+            fat_count: boot_sector.fat_count,
+            filesystem_version: boot_sector.filesystem_version,
+        }
     }
 }

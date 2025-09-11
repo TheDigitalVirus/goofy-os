@@ -20,7 +20,7 @@
      - [x] Display apps to open file
      - [x] Folders
      - [x] Fix UI rendering to don't redraw everything
-   - [ ] Display fs info in sysinfo
+   - [x] Display fs info in sysinfo
    - [x] Long names
    - [x] Creation/update time
    - [ ] Display times in the explorer

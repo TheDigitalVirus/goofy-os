@@ -7,6 +7,7 @@ use config::CONFIG;
 
 use crate::{
     allocator::{ALLOCATOR, HEAP_SIZE, HEAP_START},
+    fs::manager::FILESYSTEM,
     gdt::STACK_SIZE,
 };
 
@@ -26,12 +27,14 @@ pub struct SystemInfo {
     pub heap_used: usize,
     pub stack_size: usize,
     pub cpu_features: Vec<String>,
+    pub filesystem_info: Option<FilesystemInfo>,
 }
 
 impl SystemInfo {
     pub fn gather() -> Self {
         let heap_info = get_heap_info();
         let cpu_info = get_cpu_info();
+        let filesystem_info = get_filesystem_info();
 
         SystemInfo {
             os_name: CONFIG.os_name.to_string(),
@@ -48,6 +51,7 @@ impl SystemInfo {
 
             stack_size: STACK_SIZE,
             cpu_features: cpu_info.features,
+            filesystem_info,
         }
     }
 }
@@ -64,6 +68,19 @@ pub struct CpuInfo {
     pub model: String,
     pub base_frequency: Option<u16>,
     pub max_frequency: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FilesystemInfo {
+    pub filesystem_type: String,
+    pub total_size: u64,
+    pub bytes_per_sector: u16,
+    pub sectors_per_cluster: u8,
+    pub total_clusters: u32,
+    pub volume_label: String,
+    pub root_entries: u32,
+    pub fat_count: u8,
+    pub filesystem_version: u16,
 }
 
 fn get_heap_info() -> HeapInfo {
@@ -182,4 +199,13 @@ pub fn estimate_stack_usage() -> usize {
 
     // Clamp to reasonable values
     estimated_used.min(4096 * 5) // Max our known stack size
+}
+
+fn get_filesystem_info() -> Option<FilesystemInfo> {
+    let fs_guard = FILESYSTEM.lock();
+    if let Some(fs) = fs_guard.as_ref() {
+        Some(fs.get_filesystem_info())
+    } else {
+        None
+    }
 }

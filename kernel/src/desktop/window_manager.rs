@@ -729,8 +729,8 @@ pub fn launch_sysinfo(window_manager: &mut WindowManager) {
     window_manager.add_window(Window::new(
         200,
         100,
-        400,
-        350,
+        450,
+        450,
         0, // Will be overridden by add_window
         "System Information".to_string(),
         Some(Application::SysInfo(SysInfo::new())),

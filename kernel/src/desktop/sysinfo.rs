@@ -230,6 +230,79 @@ impl SysInfo {
 
         y_offset += 10;
 
+        // Filesystem Information
+        if let Some(fs_info) = &self.system_info.filesystem_info {
+            self.text_lines.push(surface.add_shape(Shape::Text {
+                x: x_start,
+                y: y_offset,
+                content: "FILESYSTEM INFO".to_string(),
+                color: Color::WHITE,
+                background_color: Color::DARKGRAY,
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Bold,
+                hide: false,
+            }));
+            y_offset += line_height;
+
+            self.text_lines.push(surface.add_shape(Shape::Text {
+                x: x_start,
+                y: y_offset,
+                content: format!("Type: {}", fs_info.filesystem_type),
+                color: Color::WHITE,
+                background_color: Color::DARKGRAY,
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Regular,
+                hide: false,
+            }));
+            y_offset += line_height;
+
+            self.text_lines.push(surface.add_shape(Shape::Text {
+                x: x_start,
+                y: y_offset,
+                content: format!("Volume: {}", fs_info.volume_label),
+                color: Color::WHITE,
+                background_color: Color::DARKGRAY,
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Regular,
+                hide: false,
+            }));
+            y_offset += line_height;
+
+            self.text_lines.push(surface.add_shape(Shape::Text {
+                x: x_start,
+                y: y_offset,
+                content: format!(
+                    "Total Size: {}",
+                    format_memory_size(fs_info.total_size as usize)
+                ),
+                color: Color::WHITE,
+                background_color: Color::DARKGRAY,
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Regular,
+                hide: false,
+            }));
+            y_offset += line_height;
+
+            let cluster_size = fs_info.bytes_per_sector as u64 * fs_info.sectors_per_cluster as u64;
+
+            self.text_lines.push(surface.add_shape(Shape::Text {
+                x: x_start,
+                y: y_offset,
+                content: format!(
+                    "Cluster Size: {} bytes ({} B/sector * {} sectors)",
+                    cluster_size, fs_info.bytes_per_sector, fs_info.sectors_per_cluster
+                ),
+                color: Color::WHITE,
+                background_color: Color::DARKGRAY,
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Regular,
+                hide: false,
+            }));
+            y_offset += line_height;
+
+            y_offset += 10;
+        }
+
         // Refresh button
         self.refresh_button_region = (x_start, y_offset, 173, 25);
         surface.add_shape(Shape::Rectangle {

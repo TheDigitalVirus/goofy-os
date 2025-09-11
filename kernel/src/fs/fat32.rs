@@ -1943,6 +1943,86 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
         cluster == self.boot_sector.root_cluster
     }
 
+    /// Move a file or directory by updating directory entries (much faster than copy+delete)
+    pub fn move_entry(
+        &mut self,
+        source_dir_cluster: u32,
+        source_name: &str,
+        dest_dir_cluster: u32,
+        dest_name: &str,
+    ) -> Result<(), &'static str> {
+        // Find the source entry
+        let source_entry = self
+            .find_file_in_directory(source_dir_cluster, source_name)?
+            .ok_or("Source file not found")?;
+
+        // Check if destination already exists
+        if self
+            .find_file_in_directory(dest_dir_cluster, dest_name)?
+            .is_some()
+        {
+            return Err("Destination already exists");
+        }
+
+        // Create the entry in the destination directory
+        self.create_directory_entry(
+            dest_dir_cluster,
+            dest_name,
+            source_entry.first_cluster,
+            source_entry.size,
+            source_entry.is_directory,
+        )?;
+
+        // If it's a directory, update the ".." entry to point to the new parent
+        if source_entry.is_directory && dest_dir_cluster != source_dir_cluster {
+            self.update_parent_directory_entry(source_entry.first_cluster, dest_dir_cluster)?;
+        }
+
+        // Delete the entry from the source directory
+        self.delete_file(source_dir_cluster, source_name)?;
+
+        Ok(())
+    }
+
+    /// Update the ".." entry in a directory to point to a new parent
+    fn update_parent_directory_entry(
+        &mut self,
+        dir_cluster: u32,
+        new_parent_cluster: u32,
+    ) -> Result<(), &'static str> {
+        let cluster_size = (self.sectors_per_cluster * self.bytes_per_sector) as usize;
+        let mut cluster_buffer = vec![0u8; cluster_size];
+
+        // Read the directory cluster
+        self.read_cluster(dir_cluster, &mut cluster_buffer)?;
+
+        let entries_per_cluster = cluster_size / mem::size_of::<DirectoryEntry>();
+
+        // Find the ".." entry (it should be the second entry)
+        for i in 0..entries_per_cluster {
+            let entry_offset = i * mem::size_of::<DirectoryEntry>();
+            let entry = unsafe {
+                &mut *(cluster_buffer.as_mut_ptr().add(entry_offset) as *mut DirectoryEntry)
+            };
+
+            // Check if this is the ".." entry
+            if entry.name[0] != 0xE5 && entry.name[0] != 0x00 {
+                let name = core::str::from_utf8(&entry.name[..2]).unwrap_or("");
+                if name == ".." || (entry.name[0] == b'.' && entry.name[1] == b'.') {
+                    // Update the cluster pointers to point to the new parent
+                    entry.first_cluster_high = (new_parent_cluster >> 16) as u16;
+                    entry.first_cluster_low = (new_parent_cluster & 0xFFFF) as u16;
+
+                    // Write the modified cluster back to disk
+                    self.write_cluster(dir_cluster, &cluster_buffer)?;
+                    return Ok(());
+                }
+            }
+        }
+
+        Err("Could not find '..' entry in directory")
+    }
+
     /// Get filesystem information for system monitoring
     pub fn get_filesystem_info(&self) -> FilesystemInfo {
         let boot_sector = &self.boot_sector;

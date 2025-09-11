@@ -1,5 +1,6 @@
 use crate::fs::disk::AtaDisk;
 use crate::fs::fat32::{Fat32FileSystem, FileEntry};
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
@@ -351,4 +352,155 @@ pub fn is_file(path: &str) -> Result<bool, &'static str> {
     } else {
         Ok(false)
     }
+}
+
+/// Copy a file from source path to destination path
+pub fn copy_file(source_path: &str, dest_path: &str) -> Result<(), &'static str> {
+    // Check if source exists and is a file
+    let source_entry = find_file(source_path)?.ok_or("Source file not found")?;
+    if source_entry.is_directory {
+        return Err("Source path points to a directory, not a file");
+    }
+
+    // Check if destination already exists
+    if let Ok(Some(_)) = path_exists(dest_path) {
+        return Err("Destination already exists");
+    }
+
+    // Read the source file data
+    let data = read_file(source_path)?;
+
+    // Create the destination file
+    create_file(dest_path, &data)?;
+
+    Ok(())
+}
+
+/// Copy a directory recursively from source path to destination path
+pub fn copy_directory(source_path: &str, dest_path: &str) -> Result<(), &'static str> {
+    // Check if source exists and is a directory
+    match path_exists(source_path)? {
+        Some(true) => {} // It's a directory
+        Some(false) => return Err("Source path points to a file, not a directory"),
+        None => return Err("Source directory not found"),
+    }
+
+    // Check if destination already exists
+    if let Ok(Some(_)) = path_exists(dest_path) {
+        return Err("Destination already exists");
+    }
+
+    // Create the destination directory
+    create_directory(dest_path)?;
+
+    // List contents of source directory
+    let entries = list_directory(source_path)?;
+
+    // Copy each entry
+    for entry in entries {
+        let source_item_path = if source_path == "/" {
+            format!("/{}", entry.name)
+        } else {
+            format!("{}/{}", source_path, entry.name)
+        };
+
+        let dest_item_path = if dest_path == "/" {
+            format!("/{}", entry.name)
+        } else {
+            format!("{}/{}", dest_path, entry.name)
+        };
+
+        if entry.is_directory {
+            copy_directory(&source_item_path, &dest_item_path)?;
+        } else {
+            copy_file(&source_item_path, &dest_item_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Move a file or directory from source path to destination path
+pub fn move_item(source_path: &str, dest_path: &str) -> Result<(), &'static str> {
+    // Check if source exists
+    let is_directory = match path_exists(source_path)? {
+        Some(is_dir) => is_dir,
+        None => return Err("Source path not found"),
+    };
+
+    // Check if destination already exists
+    if let Ok(Some(_)) = path_exists(dest_path) {
+        return Err("Destination already exists");
+    }
+
+    // Resolve source and destination paths
+    let (source_dir_cluster, source_filename) = resolve_path(source_path)?;
+    let source_filename = source_filename.ok_or("Invalid source path")?;
+
+    let (dest_dir_cluster, dest_filename) = resolve_path(dest_path)?;
+    let dest_filename = dest_filename.ok_or("Invalid destination path")?;
+
+    // Try the optimized move first (only works within the same filesystem)
+    let optimized_result = interrupts::without_interrupts(|| {
+        let mut fs_guard = FILESYSTEM.lock();
+        match fs_guard.as_mut() {
+            Some(fs) => fs.move_entry(
+                source_dir_cluster,
+                &source_filename,
+                dest_dir_cluster,
+                &dest_filename,
+            ),
+            None => Err("Filesystem not initialized"),
+        }
+    });
+
+    match optimized_result {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            // Fall back to copy+delete if optimized move fails
+            crate::serial_println!("Optimized move failed, falling back to copy+delete");
+
+            // Copy the item first
+            if is_directory {
+                copy_directory(source_path, dest_path)?;
+                // Delete the source directory
+                delete_directory(source_path)?;
+            } else {
+                copy_file(source_path, dest_path)?;
+                // Delete the source file
+                delete_file(source_path)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Rename a file or directory (move within the same parent directory)
+pub fn rename_item(old_path: &str, new_name: &str) -> Result<(), &'static str> {
+    // Validate new name doesn't contain path separators
+    if new_name.contains('/') {
+        return Err("New name cannot contain path separators");
+    }
+
+    // Get the parent directory of the old path
+    let old_path_trimmed = old_path.trim_end_matches('/');
+    let parent_path = if let Some(last_slash) = old_path_trimmed.rfind('/') {
+        if last_slash == 0 {
+            "/" // Root directory
+        } else {
+            &old_path_trimmed[..last_slash]
+        }
+    } else {
+        "/" // Item is in root directory
+    };
+
+    // Construct the new path
+    let new_path = if parent_path == "/" {
+        format!("/{}", new_name)
+    } else {
+        format!("{}/{}", parent_path, new_name)
+    };
+
+    // Use move_item to perform the rename
+    move_item(old_path, &new_path)
 }

@@ -11,7 +11,9 @@
  - [x] Mark windows as dirty when focused and unfocused
  - [ ] Snake game
  - [ ] Terminal
- - [ ] Icons
+ - [x] Icons
+ - [ ] Use embedded_graphics?
+ - [ ] Use icons in the system (startmenu, app icons, file explorer, etc)
  - [x] BACKBUFFER
    - [x] Cleanup backbuffer code
    - [x] Make backbuffer optional (config)

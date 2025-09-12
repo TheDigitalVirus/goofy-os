@@ -7,7 +7,7 @@ use crate::{
     },
     framebuffer::{self, Color, FrameBufferWriter, SCREEN_SIZE},
     serial_println,
-    surface::{Rect, Shape, Surface},
+    surface::{Rect, Shape, Surface, create_image_shape},
     time::get_utc_time,
 };
 use alloc::string::String;
@@ -274,6 +274,8 @@ pub fn run_desktop() -> ! {
         font_weight: FontWeight::Regular,
         hide: false,
     });
+
+    desktop.add_shape(create_image_shape(50, 50, include_bytes!("../../../test.bmp")).unwrap());
 
     serial_println!("Screen size: {}x{}", screen_size.0, screen_size.1);
 

@@ -1,7 +1,11 @@
-use alloc::{string::String, vec, vec::Vec};
+use alloc::vec;
+use alloc::{string::String, vec::Vec};
+use embedded_graphics::{pixelcolor::Rgb888, prelude::RgbColor};
 use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
+use tinybmp::{Bmp, RawBmp};
 
 use crate::framebuffer::{Color, FrameBufferWriter};
+use crate::serial_println;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Rect {
@@ -70,6 +74,15 @@ pub enum Shape {
 
         hide: bool,
     },
+    Image {
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        data: &'static [u8],
+
+        hide: bool,
+    },
 }
 
 impl Shape {
@@ -111,6 +124,18 @@ impl Shape {
                     height,
                 }
             }
+            Shape::Image {
+                x,
+                y,
+                width,
+                height,
+                ..
+            } => Rect {
+                x: *x,
+                y: *y,
+                width: *width,
+                height: *height,
+            },
         }
     }
 
@@ -130,11 +155,13 @@ impl Shape {
                 x: shape_x,
                 y: shape_y,
                 ..
-            } => {
-                *shape_x = x;
-                *shape_y = y;
             }
-            Shape::Text {
+            | Shape::Text {
+                x: shape_x,
+                y: shape_y,
+                ..
+            }
+            | Shape::Image {
                 x: shape_x,
                 y: shape_y,
                 ..
@@ -150,10 +177,9 @@ impl Shape {
     pub fn set_visibility(&mut self, visible: bool) -> Rect {
         let bounds = self.get_bounds();
         match self {
-            Shape::Rectangle { hide, .. } => {
-                *hide = !visible;
-            }
-            Shape::Text { hide, .. } => {
+            Shape::Rectangle { hide, .. }
+            | Shape::Text { hide, .. }
+            | Shape::Image { hide, .. } => {
                 *hide = !visible;
             }
         }
@@ -212,6 +238,43 @@ impl Shape {
                     *font_weight,
                     *font_size,
                 );
+            }
+            Shape::Image {
+                x,
+                y,
+                width,
+                height,
+                data,
+                hide,
+            } => {
+                if *hide {
+                    return;
+                }
+
+                // Parse BMP data on-the-fly to avoid heap allocation
+                if let Ok(bmp) = Bmp::<Rgb888>::from_slice(data) {
+                    // Render pixel by pixel to avoid collecting into a vector
+                    for (pixel_idx, pixel) in bmp.pixels().enumerate() {
+                        let px = pixel.1;
+                        let pixel_x = pixel_idx % width;
+                        let pixel_y = pixel_idx / width;
+
+                        if pixel_x < *width && pixel_y < *height {
+                            let screen_x = *x + pixel_x + offset_x;
+                            let screen_y = *y + pixel_y + offset_y;
+
+                            let color = Color::new(px.r(), px.g(), px.b());
+                            framebuffer.write_pixel(screen_x, screen_y, color);
+                        }
+                    }
+                } else {
+                    // Fallback: draw a red error rectangle
+                    framebuffer.draw_rect_outline(
+                        (*x + offset_x, *y + offset_y),
+                        (*x + width - 1 + offset_x, *y + height - 1 + offset_y),
+                        Color::new(255, 0, 0),
+                    );
+                }
             }
         }
     }
@@ -480,7 +543,9 @@ impl Surface {
 
     pub fn is_shape_visible(&self, shape_id: usize) -> Option<bool> {
         self.shapes.get(shape_id).map(|shape| match shape {
-            Shape::Rectangle { hide, .. } | Shape::Text { hide, .. } => !hide,
+            Shape::Rectangle { hide, .. }
+            | Shape::Text { hide, .. }
+            | Shape::Image { hide, .. } => !hide,
         })
     }
 
@@ -583,5 +648,31 @@ impl Surface {
     /// Get the surface bounds as a Rect
     pub fn get_bounds(&self) -> Rect {
         Rect::new(0, 0, self.width, self.height)
+    }
+}
+
+pub fn create_image_shape(x: usize, y: usize, bmp_data: &'static [u8]) -> Option<Shape> {
+    serial_println!(
+        "Creating image shape from BMP data of size {}",
+        bmp_data.len()
+    );
+
+    if let Ok(bmp) = RawBmp::from_slice(bmp_data) {
+        let size = bmp.header().image_size;
+        let height = size.height as usize;
+        let width = size.width as usize;
+
+        serial_println!("BMP dimensions: {}x{}", width, height);
+
+        Some(Shape::Image {
+            x,
+            y,
+            width,
+            height,
+            data: bmp_data,
+            hide: false,
+        })
+    } else {
+        None
     }
 }

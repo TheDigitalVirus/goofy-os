@@ -16,12 +16,14 @@
    - [x] Cleanup backbuffer code
    - [x] Make backbuffer optional (config)
    - [x] Test performance impact of backbuffer
+   - [ ] Make it faster
  - [ ] FS
-   - [ ] Copy, move, and rename functionality
+   - [x] Copy, move, and rename functionality
    - [x] Explorer
      - [x] Display apps to open file
      - [x] Folders
      - [x] Fix UI rendering to don't redraw everything
+     - [x] Copy, move, and rename functionality
    - [x] Display fs info in sysinfo
    - [x] Long names
    - [x] Creation/update time

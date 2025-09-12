@@ -9,7 +9,10 @@ use crate::{
     framebuffer::Color,
     fs::{
         fat32::FileEntry,
-        manager::{create_directory, create_file, delete_directory, delete_file, list_directory},
+        manager::{
+            copy_directory, copy_file, create_directory, create_file, delete_directory,
+            delete_file, list_directory, move_item, rename_item,
+        },
     },
     serial_println,
     surface::{Shape, Surface},
@@ -30,6 +33,21 @@ pub enum FileManagerMode {
     DeleteFile,
     DeleteFolder,
     ViewFile(FileEntry),
+    Rename(FileEntry),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ClipboardOperation {
+    Copy,
+    Cut,
+}
+
+#[derive(Clone, Debug)]
+pub struct ClipboardEntry {
+    pub file_path: String,
+    pub file_name: String,
+    pub is_directory: bool,
+    pub operation: ClipboardOperation,
 }
 
 #[derive(Clone, Debug)]
@@ -47,6 +65,9 @@ pub struct FileManager {
     status_message: String,
     open_file_options: Option<Vec<(usize, String)>>, // Y offset, name
     selected_open_file_app: Option<String>,
+
+    // Clipboard for copy/cut/paste operations
+    clipboard: Option<ClipboardEntry>,
 
     // Directory navigation - now path-based
     current_path: String,
@@ -68,6 +89,12 @@ pub struct FileManager {
     confirm_delete_btn_idx: Option<usize>,
     confirm_open_file_btn_idx: Option<usize>,
 
+    // New clipboard operation buttons
+    copy_btn_idx: Option<usize>,
+    cut_btn_idx: Option<usize>,
+    paste_btn_idx: Option<usize>,
+    rename_btn_idx: Option<usize>,
+
     // File list UI tracking for optimized updates
     file_list_shapes: Vec<(usize, usize)>, // (background_idx, name_idx) for each file entry
     previous_selected_file: Option<usize>,
@@ -86,6 +113,9 @@ impl FileManager {
             open_file_options: None,
             selected_open_file_app: None,
 
+            // Initialize clipboard as empty
+            clipboard: None,
+
             // Initialize at root directory
             current_path: "/".to_string(),
             directory_stack: Vec::new(),
@@ -103,6 +133,12 @@ impl FileManager {
             create_btn_idx: None,
             confirm_delete_btn_idx: None,
             confirm_open_file_btn_idx: None,
+
+            // Initialize new clipboard buttons
+            copy_btn_idx: None,
+            cut_btn_idx: None,
+            paste_btn_idx: None,
+            rename_btn_idx: None,
 
             file_list_shapes: Vec::new(),
             previous_selected_file: None,
@@ -160,6 +196,7 @@ impl FileManager {
             FileManagerMode::DeleteFile => self.setup_delete_file_ui(surface),
             FileManagerMode::DeleteFolder => self.setup_delete_folder_ui(surface),
             FileManagerMode::ViewFile(_) => self.setup_view_file_ui(surface),
+            FileManagerMode::Rename(_) => self.setup_rename_ui(surface),
         }
 
         self.ui_initialized = true;
@@ -221,6 +258,12 @@ impl FileManager {
         self.create_btn_idx = None;
         self.confirm_delete_btn_idx = None;
         self.confirm_open_file_btn_idx = None;
+
+        // Clear new clipboard button indices
+        self.copy_btn_idx = None;
+        self.cut_btn_idx = None;
+        self.paste_btn_idx = None;
+        self.rename_btn_idx = None;
 
         self.file_list_shapes.clear();
         self.previous_selected_file = None;
@@ -504,6 +547,143 @@ impl FileManager {
             content: "Open".to_string(),
             color: Color::BLACK,
             background_color: Color::new(180, 255, 180),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        });
+
+        // Second row of buttons for clipboard operations
+        let button_y2 = height - 90;
+
+        // Copy button
+        self.copy_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+            x: MARGIN,
+            y: button_y2,
+            width: 50,
+            height: BUTTON_HEIGHT,
+            color: Color::new(200, 255, 200),
+            filled: true,
+            hide: false,
+        }));
+
+        surface.add_shape(Shape::Rectangle {
+            x: MARGIN,
+            y: button_y2,
+            width: 50,
+            height: BUTTON_HEIGHT,
+            color: Color::BLACK,
+            filled: false,
+            hide: false,
+        });
+
+        surface.add_shape(Shape::Text {
+            x: MARGIN + 15,
+            y: button_y2 + 5,
+            content: "Copy".to_string(),
+            color: Color::BLACK,
+            background_color: Color::new(200, 255, 200),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        });
+
+        // Cut button
+        self.cut_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+            x: MARGIN + 60,
+            y: button_y2,
+            width: 50,
+            height: BUTTON_HEIGHT,
+            color: Color::new(255, 220, 150),
+            filled: true,
+            hide: false,
+        }));
+
+        surface.add_shape(Shape::Rectangle {
+            x: MARGIN + 60,
+            y: button_y2,
+            width: 50,
+            height: BUTTON_HEIGHT,
+            color: Color::BLACK,
+            filled: false,
+            hide: false,
+        });
+
+        surface.add_shape(Shape::Text {
+            x: MARGIN + 78,
+            y: button_y2 + 5,
+            content: "Cut".to_string(),
+            color: Color::BLACK,
+            background_color: Color::new(255, 220, 150),
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        });
+
+        // Paste button (only enabled if clipboard has content)
+        let paste_color = if self.clipboard.is_some() {
+            Color::new(255, 200, 255)
+        } else {
+            Color::new(200, 200, 200)
+        };
+
+        self.paste_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+            x: MARGIN + 120,
+            y: button_y2,
+            width: 50,
+            height: BUTTON_HEIGHT,
+            color: paste_color,
+            filled: true,
+            hide: false,
+        }));
+
+        surface.add_shape(Shape::Rectangle {
+            x: MARGIN + 120,
+            y: button_y2,
+            width: 50,
+            height: BUTTON_HEIGHT,
+            color: Color::BLACK,
+            filled: false,
+            hide: false,
+        });
+
+        surface.add_shape(Shape::Text {
+            x: MARGIN + 135,
+            y: button_y2 + 5,
+            content: "Paste".to_string(),
+            color: Color::BLACK,
+            background_color: paste_color,
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        });
+
+        // Rename button
+        self.rename_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+            x: MARGIN + 180,
+            y: button_y2,
+            width: 60,
+            height: BUTTON_HEIGHT,
+            color: Color::new(200, 200, 255),
+            filled: true,
+            hide: false,
+        }));
+
+        surface.add_shape(Shape::Rectangle {
+            x: MARGIN + 180,
+            y: button_y2,
+            width: 60,
+            height: BUTTON_HEIGHT,
+            color: Color::BLACK,
+            filled: false,
+            hide: false,
+        });
+
+        surface.add_shape(Shape::Text {
+            x: MARGIN + 195,
+            y: button_y2 + 5,
+            content: "Rename".to_string(),
+            color: Color::BLACK,
+            background_color: Color::new(200, 200, 255),
             font_size: RasterHeight::Size16,
             font_weight: FontWeight::Regular,
             hide: false,
@@ -1281,6 +1461,161 @@ impl FileManager {
         }
     }
 
+    fn setup_rename_ui(&mut self, surface: &mut Surface) {
+        let width = surface.width;
+        let height = surface.height;
+
+        if let FileManagerMode::Rename(file) = &self.mode {
+            // Title
+            surface.add_shape(Shape::Text {
+                x: MARGIN,
+                y: 50,
+                content: "Rename Item".to_string(),
+                color: Color::BLACK,
+                background_color: Color::new(240, 240, 240),
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Bold,
+                hide: false,
+            });
+
+            // Current name display
+            surface.add_shape(Shape::Text {
+                x: MARGIN,
+                y: 80,
+                content: format!("Current name: {}", file.name),
+                color: Color::BLACK,
+                background_color: Color::new(240, 240, 240),
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Regular,
+                hide: false,
+            });
+
+            // New name input label
+            surface.add_shape(Shape::Text {
+                x: MARGIN,
+                y: 110,
+                content: "New name:".to_string(),
+                color: Color::BLACK,
+                background_color: Color::new(240, 240, 240),
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Regular,
+                hide: false,
+            });
+
+            // New name input background
+            surface.add_shape(Shape::Rectangle {
+                x: MARGIN,
+                y: 130,
+                width: width - 2 * MARGIN,
+                height: TEXT_INPUT_HEIGHT,
+                color: Color::WHITE,
+                filled: true,
+                hide: false,
+            });
+
+            surface.add_shape(Shape::Rectangle {
+                x: MARGIN,
+                y: 130,
+                width: width - 2 * MARGIN,
+                height: TEXT_INPUT_HEIGHT,
+                color: Color::BLACK,
+                filled: false,
+                hide: false,
+            });
+
+            // New name input text
+            self.input_text_idx = Some(surface.add_shape(Shape::Text {
+                x: MARGIN + 5,
+                y: 135,
+                content: format!("{}_", self.input_text),
+                color: Color::BLACK,
+                background_color: Color::WHITE,
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Regular,
+                hide: false,
+            }));
+
+            // Buttons
+            let button_y = height - 60;
+
+            // Rename button
+            self.create_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+                x: MARGIN,
+                y: button_y,
+                width: 80,
+                height: BUTTON_HEIGHT,
+                color: Color::new(200, 200, 255),
+                filled: true,
+                hide: false,
+            }));
+
+            surface.add_shape(Shape::Rectangle {
+                x: MARGIN,
+                y: button_y,
+                width: 80,
+                height: BUTTON_HEIGHT,
+                color: Color::BLACK,
+                filled: false,
+                hide: false,
+            });
+
+            surface.add_shape(Shape::Text {
+                x: MARGIN + 20,
+                y: button_y + 5,
+                content: "Rename".to_string(),
+                color: Color::BLACK,
+                background_color: Color::new(200, 200, 255),
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Regular,
+                hide: false,
+            });
+
+            // Cancel button
+            self.back_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+                x: MARGIN + 90,
+                y: button_y,
+                width: 80,
+                height: BUTTON_HEIGHT,
+                color: Color::new(220, 220, 220),
+                filled: true,
+                hide: false,
+            }));
+
+            surface.add_shape(Shape::Rectangle {
+                x: MARGIN + 90,
+                y: button_y,
+                width: 80,
+                height: BUTTON_HEIGHT,
+                color: Color::BLACK,
+                filled: false,
+                hide: false,
+            });
+
+            surface.add_shape(Shape::Text {
+                x: MARGIN + 115,
+                y: button_y + 5,
+                content: "Cancel".to_string(),
+                color: Color::BLACK,
+                background_color: Color::new(220, 220, 220),
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Regular,
+                hide: false,
+            });
+
+            // Status bar
+            self.status_text_idx = Some(surface.add_shape(Shape::Text {
+                x: MARGIN,
+                y: height - 25,
+                content: "Enter new name and click Rename".to_string(),
+                color: Color::BLACK,
+                background_color: Color::new(240, 240, 240),
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Regular,
+                hide: false,
+            }));
+        }
+    }
+
     pub fn handle_click(
         &mut self,
         x: usize,
@@ -1294,6 +1629,7 @@ impl FileManager {
             FileManagerMode::DeleteFile => (self.handle_delete_click(x, y, surface), None),
             FileManagerMode::DeleteFolder => (self.handle_delete_folder_click(x, y, surface), None),
             FileManagerMode::ViewFile(_) => self.handle_view_click(x, y, surface),
+            FileManagerMode::Rename(_) => (self.handle_rename_click(x, y, surface), None),
         }
     }
 
@@ -1365,6 +1701,37 @@ impl FileManager {
         if self.view_file_btn_idx.is_some() {
             if self.is_button_clicked(x, y, MARGIN + 225, surface.height - 60, 65, BUTTON_HEIGHT) {
                 return self.handle_view_file(surface);
+            }
+        }
+
+        // Check clipboard operation buttons (second row)
+        let button_y2 = surface.height - 90;
+
+        // Copy button
+        if self.copy_btn_idx.is_some() {
+            if self.is_button_clicked(x, y, MARGIN, button_y2, 50, BUTTON_HEIGHT) {
+                return self.handle_copy_click(surface);
+            }
+        }
+
+        // Cut button
+        if self.cut_btn_idx.is_some() {
+            if self.is_button_clicked(x, y, MARGIN + 60, button_y2, 50, BUTTON_HEIGHT) {
+                return self.handle_cut_click(surface);
+            }
+        }
+
+        // Paste button
+        if self.paste_btn_idx.is_some() && self.clipboard.is_some() {
+            if self.is_button_clicked(x, y, MARGIN + 120, button_y2, 50, BUTTON_HEIGHT) {
+                return self.handle_paste_click(surface);
+            }
+        }
+
+        // Rename button
+        if self.rename_btn_idx.is_some() {
+            if self.is_button_clicked(x, y, MARGIN + 180, button_y2, 60, BUTTON_HEIGHT) {
+                return self.handle_rename_click_from_browse(surface);
             }
         }
 
@@ -1713,25 +2080,43 @@ impl FileManager {
                 // Use optimized text update instead of full UI rebuild
                 self.update_input_text(surface);
             }
+            FileManagerMode::Rename(_) => {
+                if c == '\x08' {
+                    // Backspace
+                    self.input_text.pop();
+                } else if c == '\n' {
+                    // Enter key, perform rename
+                    self.perform_rename(surface);
+                    return; // perform_rename handles its own UI updates
+                } else if c.is_ascii() && !c.is_control() {
+                    self.input_text.push(c);
+                }
+
+                // Use optimized text update instead of full UI rebuild
+                self.update_input_text(surface);
+            }
             _ => {}
         }
     }
 
     pub fn handle_key_input(&mut self, key: KeyCode, surface: &mut Surface) {
         match &self.mode {
-            FileManagerMode::NewFile | FileManagerMode::NewFolder => match key {
-                KeyCode::Backspace => {
-                    self.input_text.pop();
-                    // Use optimized text update instead of full UI rebuild
-                    self.update_input_text(surface);
-                }
-                KeyCode::Return => match &self.mode {
-                    FileManagerMode::NewFile => self.create_file(surface),
-                    FileManagerMode::NewFolder => self.create_folder(surface),
+            FileManagerMode::NewFile | FileManagerMode::NewFolder | FileManagerMode::Rename(_) => {
+                match key {
+                    KeyCode::Backspace => {
+                        self.input_text.pop();
+                        // Use optimized text update instead of full UI rebuild
+                        self.update_input_text(surface);
+                    }
+                    KeyCode::Return => match &self.mode {
+                        FileManagerMode::NewFile => self.create_file(surface),
+                        FileManagerMode::NewFolder => self.create_folder(surface),
+                        FileManagerMode::Rename(_) => self.perform_rename(surface),
+                        _ => {}
+                    },
                     _ => {}
-                },
-                _ => {}
-            },
+                }
+            }
             FileManagerMode::Browse => match key {
                 KeyCode::ArrowUp => {
                     if let Some(ref mut idx) = self.selected_file_index {
@@ -1778,6 +2163,183 @@ impl FileManager {
                 _ => {}
             },
             _ => {}
+        }
+    }
+
+    // Clipboard operation handlers
+    fn handle_copy_click(&mut self, surface: &mut Surface) -> bool {
+        if let Some(idx) = self.selected_file_index {
+            if let Some(file) = self.files.get(idx) {
+                let file_path = if self.current_path == "/" {
+                    format!("/{}", file.name)
+                } else {
+                    format!("{}/{}", self.current_path, file.name)
+                };
+
+                self.clipboard = Some(ClipboardEntry {
+                    file_path: file_path.clone(),
+                    file_name: file.name.clone(),
+                    is_directory: file.is_directory,
+                    operation: ClipboardOperation::Copy,
+                });
+
+                self.update_status_message(surface, format!("Copied '{}' to clipboard", file.name));
+                // Refresh UI to update paste button state
+                self.setup_ui(surface);
+            }
+        } else {
+            self.update_status_message(
+                surface,
+                "Please select a file or folder to copy".to_string(),
+            );
+        }
+        true
+    }
+
+    fn handle_cut_click(&mut self, surface: &mut Surface) -> bool {
+        if let Some(idx) = self.selected_file_index {
+            if let Some(file) = self.files.get(idx) {
+                let file_path = if self.current_path == "/" {
+                    format!("/{}", file.name)
+                } else {
+                    format!("{}/{}", self.current_path, file.name)
+                };
+
+                self.clipboard = Some(ClipboardEntry {
+                    file_path: file_path.clone(),
+                    file_name: file.name.clone(),
+                    is_directory: file.is_directory,
+                    operation: ClipboardOperation::Cut,
+                });
+
+                self.update_status_message(surface, format!("Cut '{}' to clipboard", file.name));
+                // Refresh UI to update paste button state and show cut item differently
+                self.setup_ui(surface);
+            }
+        } else {
+            self.update_status_message(
+                surface,
+                "Please select a file or folder to cut".to_string(),
+            );
+        }
+        true
+    }
+
+    fn handle_paste_click(&mut self, surface: &mut Surface) -> bool {
+        if let Some(clipboard_entry) = &self.clipboard.clone() {
+            let dest_path = if self.current_path == "/" {
+                format!("/{}", clipboard_entry.file_name)
+            } else {
+                format!("{}/{}", self.current_path, clipboard_entry.file_name)
+            };
+
+            let result = match clipboard_entry.operation {
+                ClipboardOperation::Copy => {
+                    if clipboard_entry.is_directory {
+                        copy_directory(&clipboard_entry.file_path, &dest_path)
+                    } else {
+                        copy_file(&clipboard_entry.file_path, &dest_path)
+                    }
+                }
+                ClipboardOperation::Cut => move_item(&clipboard_entry.file_path, &dest_path),
+            };
+
+            match result {
+                Ok(()) => {
+                    let operation_name = match clipboard_entry.operation {
+                        ClipboardOperation::Copy => "copied",
+                        ClipboardOperation::Cut => "moved",
+                    };
+
+                    self.update_status_message(
+                        surface,
+                        format!(
+                            "Successfully {} '{}'",
+                            operation_name, clipboard_entry.file_name
+                        ),
+                    );
+
+                    // Clear clipboard after successful cut operation
+                    if matches!(clipboard_entry.operation, ClipboardOperation::Cut) {
+                        self.clipboard = None;
+                    }
+
+                    self.refresh_file_list();
+                    self.setup_ui(surface);
+                }
+                Err(e) => {
+                    self.update_status_message(surface, format!("Paste failed: {}", e));
+                }
+            }
+        } else {
+            self.update_status_message(surface, "Clipboard is empty".to_string());
+        }
+        true
+    }
+
+    fn handle_rename_click_from_browse(&mut self, surface: &mut Surface) -> bool {
+        if let Some(idx) = self.selected_file_index {
+            if let Some(file) = self.files.get(idx).cloned() {
+                self.mode = FileManagerMode::Rename(file.clone());
+                self.input_text = file.name;
+                self.setup_ui(surface);
+            }
+        } else {
+            self.update_status_message(
+                surface,
+                "Please select a file or folder to rename".to_string(),
+            );
+        }
+        true
+    }
+
+    fn handle_rename_click(&mut self, x: usize, y: usize, surface: &mut Surface) -> bool {
+        if self.create_btn_idx.is_some() {
+            if self.is_button_clicked(x, y, MARGIN, surface.height - 60, 80, BUTTON_HEIGHT) {
+                self.perform_rename(surface);
+                return true;
+            }
+        }
+
+        if self.back_btn_idx.is_some() {
+            if self.is_button_clicked(x, y, MARGIN + 90, surface.height - 60, 80, BUTTON_HEIGHT) {
+                self.mode = FileManagerMode::Browse;
+                self.setup_ui(surface);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn perform_rename(&mut self, surface: &mut Surface) {
+        if self.input_text.trim().is_empty() {
+            self.update_status_message(surface, "Please enter a new name".to_string());
+            return;
+        }
+
+        if let FileManagerMode::Rename(file) = &self.mode {
+            let old_path = if self.current_path == "/" {
+                format!("/{}", file.name)
+            } else {
+                format!("{}/{}", self.current_path, file.name)
+            };
+
+            match rename_item(&old_path, &self.input_text) {
+                Ok(()) => {
+                    self.refresh_file_list();
+                    self.mode = FileManagerMode::Browse;
+                    self.input_text.clear();
+                    self.setup_ui(surface);
+                    self.update_status_message(
+                        surface,
+                        format!("Successfully renamed to '{}'", self.input_text),
+                    );
+                }
+                Err(e) => {
+                    self.update_status_message(surface, format!("Rename failed: {}", e));
+                }
+            }
         }
     }
 

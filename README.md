@@ -238,7 +238,7 @@ cargo run
 ## Roadmap & Future Plans
 
 ### Current Goals (In Progress)
-- [ ] **Enhanced File Operations**: Copy, move, and rename functionality in File Manager
+- [x] **Enhanced File Operations**: Copy, move, and rename functionality in File Manager
 - [x] **Window Focus Management**: Implement proper window focusing system
 - [x] **Taskbar Window List**: Show running applications in taskbar
 - [ ] **Notepad Improvements**: Fix text editing bugs and enhance functionality

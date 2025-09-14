@@ -88,7 +88,7 @@ pub enum Shape {
         y: usize,
         width: usize,
         height: usize,
-        data: &'static [Color], // Raw RGB data
+        data: Vec<Color>,
 
         hide: bool,
     },

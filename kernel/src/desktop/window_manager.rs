@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::{
     string::{String, ToString},
     vec::Vec,
@@ -35,7 +36,7 @@ pub struct Window {
     pub height: usize,
     pub id: usize,
     pub title: String,
-    pub icon: [Color; 16 * 16], // 16x16 RGB icon
+    pub icon: Vec<Color>, // 16x16 icon
     pub surface: Surface,
     pub dragging_offset: Option<(i16, i16)>,
     pub is_dragging: bool,
@@ -79,7 +80,7 @@ impl Window {
             width,
             height,
             id,
-            icon,
+            icon: icon.to_vec(),
             title,
             surface,
             application,
@@ -692,14 +693,11 @@ impl WindowManager {
         }
     }
 
-    pub fn get_window_icon(&self, window_id: usize) -> &[Color; 16 * 16] {
-        if let Some(window) = self.windows.iter().find(|w| w.id == window_id) {
-            &window.icon
-        } else {
-            // Return a default icon if window not found
-            static DEFAULT_ICON: [Color; 16 * 16] = [Color::BLACK; 16 * 16];
-            &DEFAULT_ICON
-        }
+    pub fn get_window_icon(&self, window_id: usize) -> Vec<Color> {
+        self.windows
+            .iter()
+            .find(|w| w.id == window_id)
+            .map_or(vec![Color::BLACK; 16 * 16], |w| w.icon.clone())
     }
 }
 

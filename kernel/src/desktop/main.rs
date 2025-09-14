@@ -373,9 +373,9 @@ pub fn run_desktop() -> ! {
                 }
 
                 let bg_color = if *is_focused {
-                    Color::new(200, 200, 255) // Light blue for focused
+                    Color::new(220, 220, 220) // Light gray for focused
                 } else {
-                    Color::new(220, 220, 220) // Light gray for unfocused
+                    Color::new(160, 160, 160) // Dark gray for unfocused
                 };
 
                 let bg_idx = desktop.add_shape(Shape::Rectangle {
@@ -388,12 +388,14 @@ pub fn run_desktop() -> ! {
                     hide: false,
                 });
 
+                let icon = window_manager.get_window_icon(*window_id);
+
                 let icon_idx = desktop.add_shape(Shape::RawImage {
                     x: x + 5,
                     y: (TASKBAR_WINDOW_HEIGHT - 16) / 2 + y,
                     width: 16,
                     height: 16,
-                    data: &[Color::BLACK; 16 * 16], // Placeholder icon (black square)
+                    data: icon,
                     hide: false,
                 });
 

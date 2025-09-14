@@ -222,7 +222,7 @@ fn get_char_raster(c: char, font_weight: FontWeight, font_size: RasterHeight) ->
     })
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -1001,6 +1001,10 @@ impl FrameBufferWriter {
 
     pub fn draw_raw_image(&mut self, x: usize, y: usize, width: usize, data: &[Color]) {
         for i in 0..data.len() {
+            if data[i] == Color::WHITE {
+                continue; // Skip white pixels (treat as transparent)
+            }
+
             self.write_pixel(x + i % width, y + i / width, data[i]);
         }
     }

@@ -307,7 +307,7 @@ impl Shape {
                 x,
                 y,
                 width,
-                height,
+                height: _,
                 data,
                 hide,
             } => {
@@ -315,18 +315,7 @@ impl Shape {
                     return;
                 }
 
-                // Render pixel by pixel to avoid collecting into a vector
-                for (pixel_idx, pixel) in data.iter().enumerate() {
-                    let pixel_x = pixel_idx % width;
-                    let pixel_y = pixel_idx / width;
-
-                    if pixel_x < *width && pixel_y < *height {
-                        let screen_x = *x + pixel_x + offset_x;
-                        let screen_y = *y + pixel_y + offset_y;
-
-                        framebuffer.write_pixel(screen_x, screen_y, *pixel);
-                    }
-                }
+                framebuffer.draw_raw_image(*x + offset_x, *y + offset_y, *width, data);
             }
         }
     }

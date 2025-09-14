@@ -154,7 +154,7 @@ impl Window {
         framebuffer.draw_raw_image(self.x + 2, self.y - 17, 16, &self.icon);
         framebuffer.draw_raw_text(
             &self.title,
-            self.x + 20,
+            self.x + 26,
             self.y - 15,
             Color::WHITE,
             Color::BLACK,
@@ -702,9 +702,9 @@ impl WindowManager {
 }
 
 const ICON_CALCULATOR: &[u8] = include_bytes!("../../../icons/calculator.bmp");
-const ICON_FILEMANAGER: &[u8] = include_bytes!("../../../icons/test.bmp");
-const ICON_NOTEPAD: &[u8] = include_bytes!("../../../icons/test.bmp");
-const ICON_SYSINFO: &[u8] = include_bytes!("../../../icons/test.bmp");
+const ICON_FILEMANAGER: &[u8] = include_bytes!("../../../icons/filemanager.bmp");
+const ICON_NOTEPAD: &[u8] = include_bytes!("../../../icons/notepad.bmp");
+const ICON_SYSINFO: &[u8] = include_bytes!("../../../icons/sysinfo.bmp");
 
 pub fn launch_calculator(window_manager: &mut WindowManager) {
     window_manager.add_window(Window::new(

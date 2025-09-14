@@ -352,6 +352,10 @@ pub fn run_desktop() -> ! {
         if windows_changed {
             // Remove old taskbar window shapes
             for (bg_idx, text_idx, icon_idx, _) in &taskbar_window_shapes {
+                desktop.hide_shape(*bg_idx);
+                desktop.hide_shape(*text_idx);
+                desktop.hide_shape(*icon_idx);
+
                 desktop.remove_shape(*bg_idx);
                 desktop.remove_shape(*text_idx);
                 desktop.remove_shape(*icon_idx);

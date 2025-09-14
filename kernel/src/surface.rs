@@ -52,6 +52,7 @@ impl Rect {
 }
 
 pub enum Shape {
+    Empty,
     Rectangle {
         x: usize,
         y: usize,
@@ -97,6 +98,7 @@ pub enum Shape {
 impl Shape {
     pub fn get_bounds(&self) -> Rect {
         match self {
+            Shape::Empty => Rect::new(0, 0, 0, 0),
             Shape::Rectangle {
                 x,
                 y,
@@ -195,6 +197,7 @@ impl Shape {
                 *shape_x = x;
                 *shape_y = y;
             }
+            Self::Empty => (),
         }
 
         old_bounds.union(&self.get_bounds())
@@ -209,12 +212,14 @@ impl Shape {
             | Shape::RawImage { hide, .. } => {
                 *hide = !visible;
             }
+            Self::Empty => (),
         }
         bounds
     }
 
     pub fn render(&self, framebuffer: &mut FrameBufferWriter, offset_x: usize, offset_y: usize) {
         match self {
+            Shape::Empty => (),
             Shape::Rectangle {
                 x,
                 y,
@@ -361,6 +366,10 @@ impl Surface {
     }
 
     pub fn mark_region_dirty(&mut self, region: Rect) {
+        if region.width == 0 || region.height == 0 {
+            return;
+        }
+
         let expanded_region = self.expand_region_for_overlapping_shapes(region);
 
         // Merge overlapping dirty regions to avoid fragmentation
@@ -432,6 +441,7 @@ impl Surface {
         let bounds = shape.get_bounds();
         self.shapes.push(shape);
         self.mark_region_dirty(bounds);
+
         self.shapes.len() - 1
     }
 
@@ -588,6 +598,7 @@ impl Surface {
             | Shape::Text { hide, .. }
             | Shape::BmpImage { hide, .. }
             | Shape::RawImage { hide, .. } => !hide,
+            Shape::Empty => false,
         })
     }
 

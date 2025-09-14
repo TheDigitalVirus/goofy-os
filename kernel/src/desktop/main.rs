@@ -2,7 +2,8 @@ use crate::{
     desktop::{
         input::{CLICK_QUEUE, CurrentMouseState, SCANCODE_QUEUE, STATE_QUEUE, init_queues},
         window_manager::{
-            WindowManager, launch_calculator, launch_filemanager, launch_notepad, launch_sysinfo,
+            WindowManager, generate_icon_for_app_str, launch_calculator, launch_filemanager,
+            launch_notepad, launch_sysinfo,
         },
     },
     framebuffer::{self, Color, FrameBufferWriter, SCREEN_SIZE},
@@ -85,8 +86,17 @@ pub fn run_desktop() -> ! {
         hide: false,
     });
 
+    desktop.add_shape(Shape::RawImage {
+        x: start_button_region.0 + 30,
+        y: start_button_region.1 + 13,
+        width: 24,
+        height: 24,
+        data: generate_icon_for_app_str::<24, 24>("start_icon"),
+        hide: false,
+    });
+
     desktop.add_shape(Shape::Text {
-        x: start_button_region.0 + 50,
+        x: start_button_region.0 + 60,
         y: start_button_region.1 + 15,
         content: "Start".to_string(),
         color: Color::BLACK,
@@ -96,7 +106,8 @@ pub fn run_desktop() -> ! {
         hide: false,
     });
 
-    let mut start_menu_entries: Vec<(usize, usize, usize, usize, usize, usize, &str)> = Vec::new(); // (idx, label idx, x, y, width, height, label)
+    let mut start_menu_entries: Vec<(usize, usize, usize, usize, usize, usize, usize, &str)> =
+        Vec::new(); // (idx, label idx, icon idx, x, y, width, height, label)
     let mut start_menu_open = false;
     let mut taskbar_window_shapes: Vec<(usize, usize, usize, usize)> = Vec::new(); // (background_idx, text_idx, icon_idx, window_id)
     let mut prev_windows_state: Vec<(usize, String, bool)> = Vec::new(); // Track previous window state for change detection
@@ -121,6 +132,7 @@ pub fn run_desktop() -> ! {
             filled: true,
             hide: true,
         }),
+        desktop.add_shape(Shape::Empty),
         0,
         screen_size.1 as usize - 290 - TASKBAR_HEIGHT,
         200,
@@ -140,13 +152,21 @@ pub fn run_desktop() -> ! {
             hide: true,
         }),
         desktop.add_shape(Shape::Text {
-            x: 20,
+            x: 40,
             y: screen_size.1 as usize - 335,
             content: "Calculator".to_string(),
             color: Color::BLACK,
             background_color: TASKBAR_COLOR,
             font_size: RasterHeight::Size20,
             font_weight: FontWeight::Regular,
+            hide: true,
+        }),
+        desktop.add_shape(Shape::RawImage {
+            x: 15,
+            y: screen_size.1 as usize - 335,
+            width: 16,
+            height: 16,
+            data: generate_icon_for_app_str::<16, 16>("calculator"),
             hide: true,
         }),
         0,
@@ -168,13 +188,21 @@ pub fn run_desktop() -> ! {
             hide: true,
         }),
         desktop.add_shape(Shape::Text {
-            x: 20,
+            x: 40,
             y: screen_size.1 as usize - 290,
             content: "Notepad".to_string(),
             color: Color::BLACK,
             background_color: TASKBAR_COLOR,
             font_size: RasterHeight::Size20,
             font_weight: FontWeight::Regular,
+            hide: true,
+        }),
+        desktop.add_shape(Shape::RawImage {
+            x: 15,
+            y: screen_size.1 as usize - 290,
+            width: 16,
+            height: 16,
+            data: generate_icon_for_app_str::<16, 16>("notepad"),
             hide: true,
         }),
         0,
@@ -196,13 +224,21 @@ pub fn run_desktop() -> ! {
             hide: true,
         }),
         desktop.add_shape(Shape::Text {
-            x: 20,
+            x: 40,
             y: screen_size.1 as usize - 245,
             content: "File Manager".to_string(),
             color: Color::BLACK,
             background_color: TASKBAR_COLOR,
             font_size: RasterHeight::Size20,
             font_weight: FontWeight::Regular,
+            hide: true,
+        }),
+        desktop.add_shape(Shape::RawImage {
+            x: 15,
+            y: screen_size.1 as usize - 245,
+            width: 16,
+            height: 16,
+            data: generate_icon_for_app_str::<16, 16>("filemanager"),
             hide: true,
         }),
         0,
@@ -224,13 +260,21 @@ pub fn run_desktop() -> ! {
             hide: true,
         }),
         desktop.add_shape(Shape::Text {
-            x: 20,
+            x: 40,
             y: screen_size.1 as usize - 200,
             content: "System Info".to_string(),
             color: Color::BLACK,
             background_color: TASKBAR_COLOR,
             font_size: RasterHeight::Size20,
             font_weight: FontWeight::Regular,
+            hide: true,
+        }),
+        desktop.add_shape(Shape::RawImage {
+            x: 15,
+            y: screen_size.1 as usize - 200,
+            width: 16,
+            height: 16,
+            data: generate_icon_for_app_str::<16, 16>("sysinfo"),
             hide: true,
         }),
         0,
@@ -465,16 +509,17 @@ pub fn run_desktop() -> ! {
             }
 
             if start_menu_open {
-                for (_, _, item_x, item_y, width, height, label) in &start_menu_entries {
+                for (_, _, _, item_x, item_y, width, height, label) in &start_menu_entries {
                     if *item_x <= x && x < *item_x + *width && *item_y <= y && y < *item_y + *height
                     {
                         if *label == "Calculator" {
                             launch_calculator(&mut window_manager);
 
                             start_menu_open = false;
-                            for (idx, label_idx, _, _, _, _, _) in &start_menu_entries {
+                            for (idx, label_idx, icon_idx, _, _, _, _, _) in &start_menu_entries {
                                 desktop.hide_shape(*idx);
                                 desktop.hide_shape(*label_idx);
+                                desktop.hide_shape(*icon_idx);
                             }
 
                             handled = true;
@@ -484,9 +529,10 @@ pub fn run_desktop() -> ! {
                             launch_notepad(&mut window_manager);
 
                             start_menu_open = false;
-                            for (idx, label_idx, _, _, _, _, _) in &start_menu_entries {
+                            for (idx, label_idx, icon_idx, _, _, _, _, _) in &start_menu_entries {
                                 desktop.hide_shape(*idx);
                                 desktop.hide_shape(*label_idx);
+                                desktop.hide_shape(*icon_idx);
                             }
 
                             handled = true;
@@ -496,9 +542,10 @@ pub fn run_desktop() -> ! {
                             launch_filemanager(&mut window_manager);
 
                             start_menu_open = false;
-                            for (idx, label_idx, _, _, _, _, _) in &start_menu_entries {
+                            for (idx, label_idx, icon_idx, _, _, _, _, _) in &start_menu_entries {
                                 desktop.hide_shape(*idx);
                                 desktop.hide_shape(*label_idx);
+                                desktop.hide_shape(*icon_idx);
                             }
 
                             handled = true;
@@ -508,9 +555,10 @@ pub fn run_desktop() -> ! {
                             launch_sysinfo(&mut window_manager);
 
                             start_menu_open = false;
-                            for (idx, label_idx, _, _, _, _, _) in &start_menu_entries {
+                            for (idx, label_idx, icon_idx, _, _, _, _, _) in &start_menu_entries {
                                 desktop.hide_shape(*idx);
                                 desktop.hide_shape(*label_idx);
+                                desktop.hide_shape(*icon_idx);
                             }
 
                             handled = true;
@@ -533,13 +581,15 @@ pub fn run_desktop() -> ! {
                 start_menu_open = !start_menu_open;
 
                 // Update start menu entries visibility
-                for (idx, label_idx, _, _, _, _, _) in &start_menu_entries {
+                for (idx, label_idx, icon_idx, _, _, _, _, _) in &start_menu_entries {
                     if start_menu_open {
                         desktop.show_shape(*idx);
                         desktop.show_shape(*label_idx);
+                        desktop.show_shape(*icon_idx);
                     } else {
                         desktop.hide_shape(*idx);
                         desktop.hide_shape(*label_idx);
+                        desktop.hide_shape(*icon_idx);
                     }
                 }
             }

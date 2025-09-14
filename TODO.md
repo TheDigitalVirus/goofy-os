@@ -12,8 +12,7 @@
  - [ ] Snake game
  - [ ] Terminal
  - [x] Icons
- - [ ] Use embedded_graphics?
- - [ ] Use icons in the system (startmenu, app icons, file explorer, etc)
+ - [ ] Use icons in the system (startmenu, file explorer, etc)
  - [x] BACKBUFFER
    - [x] Cleanup backbuffer code
    - [x] Make backbuffer optional (config)

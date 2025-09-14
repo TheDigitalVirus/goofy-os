@@ -52,7 +52,6 @@ impl Window {
         y: usize,
         width: usize,
         height: usize,
-        icon_data: &[u8],
         id: usize,
         title: String,
         application: Option<Application>,
@@ -64,15 +63,13 @@ impl Window {
             Application::SysInfo(_) => Color::DARKGRAY,
         });
         let surface = Surface::new(width, height, background_color);
-
-        let bmp = Bmp::<Rgb888>::from_slice(icon_data).unwrap();
-        let mut icon = [Color::BLACK; 16 * 16];
-        for y in 0..16 {
-            for x in 0..16 {
-                let pixel = bmp.pixel(Point::new(x, y)).unwrap();
-                icon[(y * 16 + x) as usize] = Color::new(pixel.r(), pixel.g(), pixel.b());
-            }
-        }
+        let icon = generate_icon_for_app_str::<16, 16>(match &application {
+            Some(Application::Calculator(_)) => "calculator",
+            Some(Application::FileManager(_)) => "filemanager",
+            Some(Application::Notepad(_)) => "notepad",
+            Some(Application::SysInfo(_)) => "sysinfo",
+            None => "unknown",
+        });
 
         Self {
             x,
@@ -80,7 +77,7 @@ impl Window {
             width,
             height,
             id,
-            icon: icon.to_vec(),
+            icon,
             title,
             surface,
             application,
@@ -705,6 +702,7 @@ const ICON_CALCULATOR: &[u8] = include_bytes!("../../../icons/calculator.bmp");
 const ICON_FILEMANAGER: &[u8] = include_bytes!("../../../icons/filemanager.bmp");
 const ICON_NOTEPAD: &[u8] = include_bytes!("../../../icons/notepad.bmp");
 const ICON_SYSINFO: &[u8] = include_bytes!("../../../icons/sysinfo.bmp");
+const START_ICON: &[u8] = include_bytes!("../../../icons/start.bmp");
 
 pub fn launch_calculator(window_manager: &mut WindowManager) {
     window_manager.add_window(Window::new(
@@ -712,7 +710,6 @@ pub fn launch_calculator(window_manager: &mut WindowManager) {
         100,
         205,
         315,
-        ICON_CALCULATOR,
         0, // Will be overridden by add_window
         "Calculator".to_string(),
         Some(Application::Calculator(Calculator::new())),
@@ -725,7 +722,6 @@ pub fn launch_filemanager(window_manager: &mut WindowManager) {
         80,
         500,
         400,
-        ICON_FILEMANAGER,
         0, // Will be overridden by add_window
         "File Manager".to_string(),
         Some(Application::FileManager(FileManager::new())),
@@ -738,7 +734,6 @@ pub fn launch_notepad(window_manager: &mut WindowManager) {
         150,
         600,
         400,
-        ICON_NOTEPAD,
         0, // Will be overridden by add_window
         "Notepad".to_string(),
         Some(Application::Notepad(Notepad::new(None))),
@@ -751,7 +746,6 @@ pub fn launch_notepad_with_file(window_manager: &mut WindowManager, file_path: S
         150,
         600,
         400,
-        ICON_NOTEPAD,
         0, // Will be overridden by add_window
         "Notepad".to_string(),
         Some(Application::Notepad(Notepad::new(Some(file_path)))),
@@ -764,9 +758,29 @@ pub fn launch_sysinfo(window_manager: &mut WindowManager) {
         100,
         450,
         450,
-        ICON_SYSINFO,
         0, // Will be overridden by add_window
         "System Information".to_string(),
         Some(Application::SysInfo(SysInfo::new())),
     ));
+}
+pub fn generate_icon_for_app_str<const W: usize, const H: usize>(app: &str) -> Vec<Color> {
+    let data = match app {
+        "calculator" => ICON_CALCULATOR.to_vec(),
+        "filemanager" => ICON_FILEMANAGER.to_vec(),
+        "notepad" => ICON_NOTEPAD.to_vec(),
+        "sysinfo" => ICON_SYSINFO.to_vec(),
+        "start_icon" => START_ICON.to_vec(), // Reuse filemanager icon for start button
+        _ => vec![0; W * H * 3],             // Default to blank icon
+    };
+
+    let bmp = Bmp::<Rgb888>::from_slice(&data).unwrap();
+    let mut icon = vec![Color::BLACK; W * H];
+    for y in 0..H {
+        for x in 0..W {
+            let pixel = bmp.pixel(Point::new(x as i32, y as i32)).unwrap();
+            icon[(y * W + x) as usize] = Color::new(pixel.r(), pixel.g(), pixel.b());
+        }
+    }
+
+    icon
 }

@@ -74,12 +74,21 @@ pub enum Shape {
 
         hide: bool,
     },
-    Image {
+    BmpImage {
         x: usize,
         y: usize,
         width: usize,
         height: usize,
         data: &'static [u8],
+
+        hide: bool,
+    },
+    RawImage {
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        data: &'static [Color], // Raw RGB data
 
         hide: bool,
     },
@@ -124,7 +133,19 @@ impl Shape {
                     height,
                 }
             }
-            Shape::Image {
+            Shape::BmpImage {
+                x,
+                y,
+                width,
+                height,
+                ..
+            } => Rect {
+                x: *x,
+                y: *y,
+                width: *width,
+                height: *height,
+            },
+            Shape::RawImage {
                 x,
                 y,
                 width,
@@ -161,7 +182,12 @@ impl Shape {
                 y: shape_y,
                 ..
             }
-            | Shape::Image {
+            | Shape::BmpImage {
+                x: shape_x,
+                y: shape_y,
+                ..
+            }
+            | Shape::RawImage {
                 x: shape_x,
                 y: shape_y,
                 ..
@@ -179,7 +205,8 @@ impl Shape {
         match self {
             Shape::Rectangle { hide, .. }
             | Shape::Text { hide, .. }
-            | Shape::Image { hide, .. } => {
+            | Shape::BmpImage { hide, .. }
+            | Shape::RawImage { hide, .. } => {
                 *hide = !visible;
             }
         }
@@ -239,7 +266,7 @@ impl Shape {
                     *font_size,
                 );
             }
-            Shape::Image {
+            Shape::BmpImage {
                 x,
                 y,
                 width,
@@ -274,6 +301,31 @@ impl Shape {
                         (*x + width - 1 + offset_x, *y + height - 1 + offset_y),
                         Color::new(255, 0, 0),
                     );
+                }
+            }
+            Shape::RawImage {
+                x,
+                y,
+                width,
+                height,
+                data,
+                hide,
+            } => {
+                if *hide {
+                    return;
+                }
+
+                // Render pixel by pixel to avoid collecting into a vector
+                for (pixel_idx, pixel) in data.iter().enumerate() {
+                    let pixel_x = pixel_idx % width;
+                    let pixel_y = pixel_idx / width;
+
+                    if pixel_x < *width && pixel_y < *height {
+                        let screen_x = *x + pixel_x + offset_x;
+                        let screen_y = *y + pixel_y + offset_y;
+
+                        framebuffer.write_pixel(screen_x, screen_y, *pixel);
+                    }
                 }
             }
         }
@@ -545,7 +597,8 @@ impl Surface {
         self.shapes.get(shape_id).map(|shape| match shape {
             Shape::Rectangle { hide, .. }
             | Shape::Text { hide, .. }
-            | Shape::Image { hide, .. } => !hide,
+            | Shape::BmpImage { hide, .. }
+            | Shape::RawImage { hide, .. } => !hide,
         })
     }
 
@@ -664,7 +717,7 @@ pub fn create_image_shape(x: usize, y: usize, bmp_data: &'static [u8]) -> Option
 
         serial_println!("BMP dimensions: {}x{}", width, height);
 
-        Some(Shape::Image {
+        Some(Shape::BmpImage {
             x,
             y,
             width,

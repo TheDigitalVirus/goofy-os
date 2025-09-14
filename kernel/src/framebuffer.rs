@@ -999,6 +999,12 @@ impl FrameBufferWriter {
         }
     }
 
+    pub fn draw_raw_image(&mut self, x: usize, y: usize, width: usize, data: &[Color]) {
+        for i in 0..data.len() {
+            self.write_pixel(x + i % width, y + i / width, data[i]);
+        }
+    }
+
     /// Present the backbuffer to the screen (swap buffers)
     pub fn present_backbuffer(&mut self) {
         if let Some(ref backbuffer) = self.backbuffer {

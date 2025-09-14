@@ -7,7 +7,7 @@ use crate::{
     },
     framebuffer::{self, Color, FrameBufferWriter, SCREEN_SIZE},
     serial_println,
-    surface::{Rect, Shape, Surface, create_image_shape},
+    surface::{Rect, Shape, Surface},
     time::get_utc_time,
 };
 use alloc::string::String;
@@ -98,7 +98,7 @@ pub fn run_desktop() -> ! {
 
     let mut start_menu_entries: Vec<(usize, usize, usize, usize, usize, usize, &str)> = Vec::new(); // (idx, label idx, x, y, width, height, label)
     let mut start_menu_open = false;
-    let mut taskbar_window_shapes: Vec<(usize, usize, usize)> = Vec::new(); // (background_idx, text_idx, window_id)
+    let mut taskbar_window_shapes: Vec<(usize, usize, usize, usize)> = Vec::new(); // (background_idx, text_idx, icon_idx, window_id)
     let mut prev_windows_state: Vec<(usize, String, bool)> = Vec::new(); // Track previous window state for change detection
 
     // Start menu placeholder
@@ -275,8 +275,6 @@ pub fn run_desktop() -> ! {
         hide: false,
     });
 
-    desktop.add_shape(create_image_shape(50, 50, include_bytes!("../../../test.bmp")).unwrap());
-
     serial_println!("Screen size: {}x{}", screen_size.0, screen_size.1);
 
     let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Azerty, HandleControl::Ignore);
@@ -353,9 +351,10 @@ pub fn run_desktop() -> ! {
 
         if windows_changed {
             // Remove old taskbar window shapes
-            for (bg_idx, text_idx, _) in &taskbar_window_shapes {
-                desktop.hide_shape(*bg_idx);
-                desktop.hide_shape(*text_idx);
+            for (bg_idx, text_idx, icon_idx, _) in &taskbar_window_shapes {
+                desktop.remove_shape(*bg_idx);
+                desktop.remove_shape(*text_idx);
+                desktop.remove_shape(*icon_idx);
             }
             taskbar_window_shapes.clear();
 
@@ -389,6 +388,15 @@ pub fn run_desktop() -> ! {
                     hide: false,
                 });
 
+                let icon_idx = desktop.add_shape(Shape::RawImage {
+                    x: x + 5,
+                    y: (TASKBAR_WINDOW_HEIGHT - 16) / 2 + y,
+                    width: 16,
+                    height: 16,
+                    data: &[Color::BLACK; 16 * 16], // Placeholder icon (black square)
+                    hide: false,
+                });
+
                 // Truncate title if too long
                 let display_title = if title.len() > 12 {
                     format!("{}...", &title[..9])
@@ -397,7 +405,7 @@ pub fn run_desktop() -> ! {
                 };
 
                 let text_idx = desktop.add_shape(Shape::Text {
-                    x: x + 5,
+                    x: x + 26,
                     y: y + 8,
                     content: display_title,
                     color: Color::BLACK,
@@ -407,7 +415,7 @@ pub fn run_desktop() -> ! {
                     hide: false,
                 });
 
-                taskbar_window_shapes.push((bg_idx, text_idx, *window_id));
+                taskbar_window_shapes.push((bg_idx, text_idx, icon_idx, *window_id));
             }
 
             // Update the previous state cache
@@ -432,12 +440,12 @@ pub fn run_desktop() -> ! {
 
             // Check for clicks on taskbar window icons
             if !handled {
-                for (_bg_idx, _text_idx, window_id) in &taskbar_window_shapes {
+                for (_bg_idx, _text_idx, _icon_idx, window_id) in &taskbar_window_shapes {
                     // Get the shape bounds (we need to calculate them since we stored the indices)
                     let taskbar_start_x = 170;
                     let window_index = taskbar_window_shapes
                         .iter()
-                        .position(|(_, _, id)| id == window_id)
+                        .position(|(_, _, _, id)| id == window_id)
                         .unwrap_or(0);
                     let icon_x = taskbar_start_x + window_index * 125;
                     let icon_y = screen_size.1 as usize - TASKBAR_HEIGHT + 10;

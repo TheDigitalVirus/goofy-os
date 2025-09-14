@@ -2,7 +2,10 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
+use embedded_graphics::{image::GetPixel, prelude::Point};
+use embedded_graphics::{pixelcolor::Rgb888, prelude::RgbColor};
 use pc_keyboard::KeyCode;
+use tinybmp::Bmp;
 
 use crate::{
     desktop::{
@@ -32,6 +35,7 @@ pub struct Window {
     pub height: usize,
     pub id: usize,
     pub title: String,
+    pub icon: [Color; 16 * 16], // 16x16 RGB icon
     pub surface: Surface,
     pub dragging_offset: Option<(i16, i16)>,
     pub is_dragging: bool,
@@ -47,6 +51,7 @@ impl Window {
         y: usize,
         width: usize,
         height: usize,
+        icon_data: &[u8],
         id: usize,
         title: String,
         application: Option<Application>,
@@ -59,12 +64,22 @@ impl Window {
         });
         let surface = Surface::new(width, height, background_color);
 
+        let bmp = Bmp::<Rgb888>::from_slice(icon_data).unwrap();
+        let mut icon = [Color::BLACK; 16 * 16];
+        for y in 0..16 {
+            for x in 0..16 {
+                let pixel = bmp.pixel(Point::new(x, y)).unwrap();
+                icon[(y * 16 + x) as usize] = Color::new(pixel.r(), pixel.g(), pixel.b());
+            }
+        }
+
         Self {
             x,
             y,
             width,
             height,
             id,
+            icon,
             title,
             surface,
             application,
@@ -135,9 +150,10 @@ impl Window {
             (self.x + self.width, self.y),
             Color::BLACK,
         );
+        framebuffer.draw_raw_image(self.x + 2, self.y - 17, 16, &self.icon);
         framebuffer.draw_raw_text(
             &self.title,
-            self.x + 5,
+            self.x + 20,
             self.y - 15,
             Color::WHITE,
             Color::BLACK,
@@ -675,7 +691,22 @@ impl WindowManager {
             }
         }
     }
+
+    pub fn get_window_icon(&self, window_id: usize) -> &[Color; 16 * 16] {
+        if let Some(window) = self.windows.iter().find(|w| w.id == window_id) {
+            &window.icon
+        } else {
+            // Return a default icon if window not found
+            static DEFAULT_ICON: [Color; 16 * 16] = [Color::BLACK; 16 * 16];
+            &DEFAULT_ICON
+        }
+    }
 }
+
+const ICON_CALCULATOR: &[u8] = include_bytes!("../../../icons/calculator.bmp");
+const ICON_FILEMANAGER: &[u8] = include_bytes!("../../../icons/test.bmp");
+const ICON_NOTEPAD: &[u8] = include_bytes!("../../../icons/test.bmp");
+const ICON_SYSINFO: &[u8] = include_bytes!("../../../icons/test.bmp");
 
 pub fn launch_calculator(window_manager: &mut WindowManager) {
     window_manager.add_window(Window::new(
@@ -683,6 +714,7 @@ pub fn launch_calculator(window_manager: &mut WindowManager) {
         100,
         205,
         315,
+        ICON_CALCULATOR,
         0, // Will be overridden by add_window
         "Calculator".to_string(),
         Some(Application::Calculator(Calculator::new())),
@@ -695,6 +727,7 @@ pub fn launch_filemanager(window_manager: &mut WindowManager) {
         80,
         500,
         400,
+        ICON_FILEMANAGER,
         0, // Will be overridden by add_window
         "File Manager".to_string(),
         Some(Application::FileManager(FileManager::new())),
@@ -707,6 +740,7 @@ pub fn launch_notepad(window_manager: &mut WindowManager) {
         150,
         600,
         400,
+        ICON_NOTEPAD,
         0, // Will be overridden by add_window
         "Notepad".to_string(),
         Some(Application::Notepad(Notepad::new(None))),
@@ -719,6 +753,7 @@ pub fn launch_notepad_with_file(window_manager: &mut WindowManager, file_path: S
         150,
         600,
         400,
+        ICON_NOTEPAD,
         0, // Will be overridden by add_window
         "Notepad".to_string(),
         Some(Application::Notepad(Notepad::new(Some(file_path)))),
@@ -731,6 +766,7 @@ pub fn launch_sysinfo(window_manager: &mut WindowManager) {
         100,
         450,
         450,
+        ICON_SYSINFO,
         0, // Will be overridden by add_window
         "System Information".to_string(),
         Some(Application::SysInfo(SysInfo::new())),

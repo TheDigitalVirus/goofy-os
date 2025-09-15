@@ -7,11 +7,15 @@
 #![feature(const_slice_make_iter)]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
+#![allow(static_mut_refs)]
 
 #[cfg(test)]
 use bootloader_api::{BootInfo, entry_point};
 use conquer_once::spin::OnceCell;
-use x86_64::VirtAddr;
+use x86_64::{
+    VirtAddr,
+    registers::control::{Cr0, Cr0Flags},
+};
 
 use core::panic::PanicInfo;
 use exit::{QemuExitCode, exit_qemu};
@@ -76,6 +80,16 @@ impl Stack for BootStack {
 pub fn init(physical_memory_offset: x86_64::VirtAddr) {
     // Initialize the physical memory offset
     PHYSICAL_MEMORY_OFFSET.init_once(|| physical_memory_offset);
+
+    unsafe {
+        Cr0::update(|cr0| {
+            *cr0 |= Cr0Flags::ALIGNMENT_MASK;
+            *cr0 |= Cr0Flags::NUMERIC_ERROR;
+            *cr0 |= Cr0Flags::MONITOR_COPROCESSOR;
+            // enable cache
+            *cr0 &= !(Cr0Flags::CACHE_DISABLE | Cr0Flags::NOT_WRITE_THROUGH);
+        })
+    };
 
     interrupts::init_idt();
     gdt::init();

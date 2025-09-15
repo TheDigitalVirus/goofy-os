@@ -6,7 +6,8 @@ use core::fmt;
 use x86_64::VirtAddr;
 
 use crate::Stack;
-use crate::gdt::STACK_SIZE;
+
+pub const STACK_SIZE: usize = 1024 * 16; // 16 KB
 
 /// The status of the task - used for scheduling
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

@@ -15,6 +15,7 @@ use bootloader_api::{BootInfo, entry_point};
 use kernel::apic;
 use kernel::gdt::STACK_SIZE;
 use kernel::sysinfo::{STACK_BASE, get_stack_pointer};
+use kernel::tasks::{init, scheduler};
 use kernel::{BootStack, KERNEL_STACK, interrupts as kernel_interrupts};
 use kernel::{desktop::main::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
 use kernel::{gdt::GDT, interrupts::syscall_handler_asm};
@@ -28,6 +29,12 @@ use x86_64::registers::{
     model_specific::{LStar, SFMask, Star},
     rflags::RFlags,
 };
+extern "C" fn foo() {
+    for _i in 0..5 {
+        serial_println!("hello from task {}", scheduler::get_current_taskid());
+        scheduler::reschedule();
+    }
+}
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
@@ -89,6 +96,20 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             )
         };
     };
+
+    serial_println!("Init scheduler...");
+    init();
+    serial_println!("Spawn tasks...");
+
+    for _i in 0..2 {
+        scheduler::spawn(foo);
+    }
+
+    serial_println!("Reschedule...");
+
+    scheduler::reschedule();
+
+    serial_println!("Returned to kernel_main!");
 
     kernel_interrupts::init_mouse();
 

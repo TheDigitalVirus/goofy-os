@@ -1,12 +1,13 @@
-use crate::tasks::task::TaskFrame;
+use crate::errno::{Error, Result};
+use crate::tasks::task::{LOW_PRIORITY, NO_PRIORITIES, TaskFrame, TaskPriority};
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::rc::Rc;
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use crate::serial_println;
 use crate::tasks::switch::switch;
 use crate::tasks::task::{Task, TaskId, TaskQueue, TaskStatus};
+use crate::{lsb, serial_println};
 
 static TID_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -16,7 +17,9 @@ pub(crate) struct Scheduler {
     /// task id of the idle task
     idle_task: Rc<RefCell<Task>>,
     /// queue of tasks, which are ready
-    ready_queue: TaskQueue,
+    ready_queues: [TaskQueue; NO_PRIORITIES],
+    /// Bitmap to show, which queue is used
+    prio_bitmap: usize,
     /// queue of tasks, which are finished and can be released
     finished_tasks: VecDeque<TaskId>,
     /// map between task id and task control block
@@ -34,8 +37,9 @@ impl Scheduler {
         Scheduler {
             current_task: idle_task.clone(),
             idle_task: idle_task.clone(),
-            ready_queue: TaskQueue::new(),
-            finished_tasks: VecDeque::new(),
+            ready_queues: Default::default(),
+            prio_bitmap: 0,
+            finished_tasks: VecDeque::<TaskId>::new(),
             tasks,
         }
     }
@@ -50,29 +54,27 @@ impl Scheduler {
         }
     }
 
-    pub fn spawn(&mut self, func: extern "C" fn()) -> TaskId {
-        serial_println!("Spawning new task...");
+    pub fn spawn(&mut self, func: extern "C" fn(), prio: TaskPriority) -> Result<TaskId> {
+        let prio_number = prio.into() as usize;
+
+        if prio_number >= NO_PRIORITIES {
+            return Err(Error::BadPriority);
+        }
 
         // Create the new task.
         let tid = self.get_tid();
-
-        serial_println!("New task id is {}", tid);
-
-        let task = Rc::new(RefCell::new(Task::new(tid, TaskStatus::Ready)));
-
-        serial_println!("Spawning task {}", tid);
+        let task = Rc::new(RefCell::new(Task::new(tid, TaskStatus::Ready, prio)));
 
         task.borrow_mut().create_stack_frame(func);
 
-        serial_println!("Created stack frame for task {}", tid);
-
         // Add it to the task lists.
-        self.ready_queue.push(task.clone());
+        self.ready_queues[prio_number].push(task.clone());
+        self.prio_bitmap |= 1 << prio_number;
         self.tasks.insert(tid, task);
 
         serial_println!("Creating task {}", tid);
 
-        tid
+        Ok(tid)
     }
 
     pub fn exit(&mut self) -> ! {
@@ -92,6 +94,23 @@ impl Scheduler {
         self.current_task.borrow().id
     }
 
+    /// determine the next task, which is ready and priority is a greater than or equal to prio
+    fn get_next_task(&mut self, prio: TaskPriority) -> Option<Rc<RefCell<Task>>> {
+        let i = lsb(self.prio_bitmap);
+        let mut task = None;
+
+        if i <= prio.into().into() {
+            task = self.ready_queues[i].pop();
+
+            // clear bitmap entry for the priority i if the queues is empty
+            if self.ready_queues[i].is_empty() {
+                self.prio_bitmap &= !(1 << i);
+            }
+        }
+
+        task
+    }
+
     pub fn schedule(&mut self) {
         // do we have finished tasks? => drop tasks => deallocate implicitly the stack
         while let Some(id) = self.finished_tasks.pop_front() {
@@ -103,17 +122,24 @@ impl Scheduler {
         }
 
         // Get information about the current task.
-        let (current_id, current_stack_pointer, current_status) = {
+        let (current_id, current_stack_pointer, current_prio, current_status) = {
             let mut borrowed = self.current_task.borrow_mut();
             (
                 borrowed.id,
                 &mut borrowed.last_stack_pointer as *mut usize,
+                borrowed.prio,
                 borrowed.status,
             )
         };
 
         // do we have a task, which is ready?
-        let mut next_task = self.ready_queue.pop();
+        let mut next_task;
+        if current_status == TaskStatus::Running {
+            next_task = self.get_next_task(current_prio);
+        } else {
+            next_task = self.get_next_task(LOW_PRIORITY);
+        }
+
         if next_task.is_none()
             && current_status != TaskStatus::Running
             && current_status != TaskStatus::Idle
@@ -134,7 +160,8 @@ impl Scheduler {
             if current_status == TaskStatus::Running {
                 serial_println!("Add task {} to ready queue", current_id);
                 self.current_task.borrow_mut().status = TaskStatus::Ready;
-                self.ready_queue.push(self.current_task.clone());
+                self.ready_queues[current_prio.into() as usize].push(self.current_task.clone());
+                self.prio_bitmap |= 1 << current_prio.into() as usize;
             } else if current_status == TaskStatus::Finished {
                 serial_println!("Task {} finished", current_id);
                 self.current_task.borrow_mut().status = TaskStatus::Invalid;
@@ -168,15 +195,15 @@ impl Scheduler {
 static mut SCHEDULER: Option<Scheduler> = None;
 
 /// Initialize module, must be called once, and only once
-pub(crate) fn init() {
+pub fn init() {
     unsafe {
         SCHEDULER = Some(Scheduler::new());
     }
 }
 
 /// Create a new kernel task
-pub fn spawn(func: extern "C" fn()) -> TaskId {
-    unsafe { SCHEDULER.as_mut().unwrap().spawn(func) }
+pub fn spawn(func: extern "C" fn(), prio: TaskPriority) -> Result<TaskId> {
+    unsafe { SCHEDULER.as_mut().unwrap().spawn(func, prio) }
 }
 
 /// Trigger the scheduler to switch to the next available task

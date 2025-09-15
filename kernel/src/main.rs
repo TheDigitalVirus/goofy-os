@@ -15,6 +15,7 @@ use bootloader_api::{BootInfo, entry_point};
 use kernel::apic;
 use kernel::gdt::STACK_SIZE;
 use kernel::sysinfo::{STACK_BASE, get_stack_pointer};
+use kernel::tasks::task::{HIGH_PRIORITY, NORMAL_PRIORITY};
 use kernel::tasks::{init, scheduler};
 use kernel::{BootStack, KERNEL_STACK, interrupts as kernel_interrupts};
 use kernel::{desktop::main::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
@@ -102,8 +103,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("Spawn tasks...");
 
     for _i in 0..2 {
-        scheduler::spawn(foo);
+        scheduler::spawn(foo, NORMAL_PRIORITY).unwrap();
     }
+    scheduler::spawn(foo, HIGH_PRIORITY).unwrap();
 
     serial_println!("Reschedule...");
 

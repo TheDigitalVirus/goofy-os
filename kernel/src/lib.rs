@@ -17,6 +17,7 @@ use x86_64::{
     registers::control::{Cr0, Cr0Flags},
 };
 
+use core::arch::asm;
 use core::panic::PanicInfo;
 use exit::{QemuExitCode, exit_qemu};
 
@@ -25,6 +26,7 @@ extern crate alloc;
 pub mod allocator;
 pub mod apic;
 pub mod desktop;
+pub mod errno;
 pub mod exit;
 pub mod framebuffer;
 pub mod fs;
@@ -49,6 +51,26 @@ pub static BOOTLOADER_CONFIG: BootloaderConfig = {
 
 pub static PHYSICAL_MEMORY_OFFSET: OnceCell<x86_64::VirtAddr> = OnceCell::uninit();
 pub static KERNEL_STACK: OnceCell<BootStack> = OnceCell::uninit();
+
+/// Search the least significant bit
+#[inline(always)]
+pub(crate) fn lsb(i: usize) -> usize {
+    let ret;
+
+    if i == 0 {
+        ret = !0usize;
+    } else {
+        unsafe {
+            asm!("bsf {0}, {1}",
+                lateout(reg) ret,
+                in(reg) i,
+                options(nomem, nostack)
+            );
+        }
+    }
+
+    ret
+}
 
 pub trait Stack {
     fn top(&self) -> VirtAddr;

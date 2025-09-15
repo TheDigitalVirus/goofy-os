@@ -1,5 +1,3 @@
-//! Architecture dependent interface to initialize a task
-
 use crate::tasks::scheduler::do_exit;
 use crate::tasks::task::*;
 use core::mem::size_of;

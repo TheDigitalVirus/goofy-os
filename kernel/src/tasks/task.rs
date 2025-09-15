@@ -5,7 +5,7 @@ use core::cell::RefCell;
 use core::fmt;
 use x86_64::VirtAddr;
 
-use crate::Stack;
+use crate::{KERNEL_STACK, Stack};
 
 pub const STACK_SIZE: usize = 1024 * 16; // 16 KB
 
@@ -39,6 +39,32 @@ impl alloc::fmt::Display for TaskId {
     }
 }
 
+/// Priority of a task
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy)]
+pub struct TaskPriority(u8);
+
+impl TaskPriority {
+    pub const fn into(self) -> u8 {
+        self.0
+    }
+
+    pub const fn from(x: u8) -> Self {
+        TaskPriority(x)
+    }
+}
+
+impl alloc::fmt::Display for TaskPriority {
+    fn fmt(&self, f: &mut alloc::fmt::Formatter) -> alloc::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+pub const NO_PRIORITIES: usize = 32;
+pub const REALTIME_PRIORITY: TaskPriority = TaskPriority::from(0);
+pub const HIGH_PRIORITY: TaskPriority = TaskPriority::from(0);
+pub const NORMAL_PRIORITY: TaskPriority = TaskPriority::from(24);
+pub const LOW_PRIORITY: TaskPriority = TaskPriority::from(NO_PRIORITIES as u8 - 1);
+
 #[derive(Copy, Clone)]
 #[repr(C, align(64))]
 pub(crate) struct TaskStack {
@@ -69,17 +95,12 @@ impl Default for TaskStack {
     }
 }
 
+#[derive(Default)]
 pub(crate) struct TaskQueue {
     queue: VecDeque<Rc<RefCell<Task>>>,
 }
 
 impl TaskQueue {
-    pub fn new() -> Self {
-        Self {
-            queue: Default::default(),
-        }
-    }
-
     /// Add a task to the queue
     pub fn push(&mut self, task: Rc<RefCell<Task>>) {
         self.queue.push_back(task);
@@ -89,11 +110,10 @@ impl TaskQueue {
     pub fn pop(&mut self) -> Option<Rc<RefCell<Task>>> {
         self.queue.pop_front()
     }
-}
 
-impl Default for TaskQueue {
-    fn default() -> Self {
-        Self::new()
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
     }
 }
 
@@ -102,6 +122,8 @@ impl Default for TaskQueue {
 pub(crate) struct Task {
     /// The ID of this context
     pub id: TaskId,
+    /// Task Priority
+    pub prio: TaskPriority,
     /// Status of a task, e.g. if the task is ready or blocked
     pub status: TaskStatus,
     /// Last stack pointer before a context switch to another task
@@ -111,18 +133,20 @@ pub(crate) struct Task {
 }
 
 impl Task {
-    pub fn new_idle(id: TaskId) -> Task {
-        Task {
+    pub fn new_idle(id: TaskId) -> Self {
+        Self {
             id,
+            prio: LOW_PRIORITY,
             status: TaskStatus::Idle,
             last_stack_pointer: 0,
-            stack: Box::new(crate::KERNEL_STACK.get().unwrap().clone()),
+            stack: Box::new(KERNEL_STACK.get().unwrap().clone()),
         }
     }
 
-    pub fn new(id: TaskId, status: TaskStatus) -> Task {
-        Task {
+    pub fn new(id: TaskId, status: TaskStatus, prio: TaskPriority) -> Self {
+        Self {
             id,
+            prio,
             status,
             last_stack_pointer: 0,
             stack: Box::new(TaskStack::new()),

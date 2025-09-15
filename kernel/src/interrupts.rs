@@ -3,11 +3,6 @@ use crate::apic;
 use crate::{hlt_loop, println, serial_println};
 use core::{arch::asm, u64};
 
-#[cfg(processes_enabled)]
-use crate::print;
-#[cfg(processes_enabled)]
-use crate::process::{exit_current_process, save_current_state, schedule};
-
 use lazy_static::lazy_static;
 #[cfg(not(uefi))]
 use pic8259::ChainedPics;
@@ -155,14 +150,6 @@ extern "x86-interrupt" fn double_fault_handler(
 }
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
-    #[cfg(processes_enabled)]
-    {
-        save_current_state(&_stack_frame);
-
-        print!(".");
-        serial_println!("TIMER");
-    }
-
     // Notify the Programmable Interrupt Controller (PIC) that the interrupt has been handled
     #[cfg(not(uefi))]
     unsafe {
@@ -172,10 +159,6 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
 
     #[cfg(uefi)]
     apic::end_interrupt();
-
-    // Switch to the next task, passing the interrupt frame to save current process state
-    #[cfg(processes_enabled)]
-    crate::process::schedule();
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
@@ -283,15 +266,9 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
 
         interrupts::disable();
 
-        #[cfg(processes_enabled)]
-        exit_current_process(rdi as u8);
-
         serial_println!("Process marked for exit, returning to scheduler...");
 
         interrupts::enable(); // Just to be sure
-
-        #[cfg(processes_enabled)]
-        schedule();
     }
 
     serial_println!("About to return from syscall...");

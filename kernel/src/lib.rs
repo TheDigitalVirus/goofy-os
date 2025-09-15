@@ -11,6 +11,7 @@
 #[cfg(test)]
 use bootloader_api::{BootInfo, entry_point};
 use conquer_once::spin::OnceCell;
+use x86_64::VirtAddr;
 
 use core::panic::PanicInfo;
 use exit::{QemuExitCode, exit_qemu};
@@ -26,12 +27,13 @@ pub mod fs;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;
-#[cfg(processes_enabled)]
-pub mod process;
 pub mod serial;
 pub mod surface;
 pub mod sysinfo;
 pub mod time;
+
+// #[cfg(processes_enabled)]
+pub mod tasks;
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 
@@ -42,6 +44,34 @@ pub static BOOTLOADER_CONFIG: BootloaderConfig = {
 };
 
 pub static PHYSICAL_MEMORY_OFFSET: OnceCell<x86_64::VirtAddr> = OnceCell::uninit();
+pub static KERNEL_STACK: OnceCell<BootStack> = OnceCell::uninit();
+
+pub trait Stack {
+    fn top(&self) -> VirtAddr;
+    fn bottom(&self) -> VirtAddr;
+}
+
+#[derive(Copy, Clone)]
+pub struct BootStack {
+    pub start: VirtAddr,
+    pub end: VirtAddr,
+}
+
+impl BootStack {
+    pub const fn new(start: VirtAddr, end: VirtAddr) -> Self {
+        Self { start, end }
+    }
+}
+
+impl Stack for BootStack {
+    fn top(&self) -> VirtAddr {
+        self.end - 16u64
+    }
+
+    fn bottom(&self) -> VirtAddr {
+        self.start
+    }
+}
 
 pub fn init(physical_memory_offset: x86_64::VirtAddr) {
     // Initialize the physical memory offset

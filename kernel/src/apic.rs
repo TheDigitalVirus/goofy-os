@@ -179,7 +179,7 @@ unsafe fn init_timer(lapic_pointer: *mut u32) {
 
     // Set initial count - smaller value for more frequent interrupts
     let ticr = unsafe { lapic_pointer.offset(APICOffset::Ticr as isize / 4) };
-    unsafe { ticr.write_volatile(250_000) }; // Very slow // TODO: Spead this up when more processes
+    unsafe { ticr.write_volatile(2_500_000) }; // Very slow // TODO: Spead this up when more processes
 
     serial_println!("Local APIC timer initialized");
 }

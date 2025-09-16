@@ -6,7 +6,7 @@ use x86_64::{
     structures::paging::{FrameAllocator, Mapper, PhysFrame, Size4KiB},
 };
 
-use crate::interrupts::InterruptIndex;
+use crate::{interrupts::InterruptIndex, serial_println};
 
 #[derive(Clone)]
 struct MyHandler {
@@ -160,7 +160,7 @@ unsafe fn init_local_apic(
     unsafe {
         init_timer(lapic_pointer);
         init_keyboard(lapic_pointer);
-        init_mouse(lapic_pointer);
+        // init_mouse(lapic_pointer);
     };
 }
 
@@ -179,7 +179,9 @@ unsafe fn init_timer(lapic_pointer: *mut u32) {
 
     // Set initial count - smaller value for more frequent interrupts
     let ticr = unsafe { lapic_pointer.offset(APICOffset::Ticr as isize / 4) };
-    unsafe { ticr.write_volatile(2_500_000) }; // Very slow // TODO: Spead this up when more processes
+    unsafe { ticr.write_volatile(250_000) }; // Very slow // TODO: Spead this up when more processes
+
+    serial_println!("Local APIC timer initialized");
 }
 
 unsafe fn init_keyboard(lapic_pointer: *mut u32) {

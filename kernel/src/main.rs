@@ -9,31 +9,30 @@ use core::panic::PanicInfo;
 
 extern crate alloc;
 
-use bootloader_api::info::{MemoryRegion, MemoryRegionKind};
+use bootloader_api::info::MemoryRegion;
 use bootloader_api::{BootInfo, entry_point};
 #[cfg(uefi)]
 use kernel::apic;
 use kernel::gdt::STACK_SIZE;
 use kernel::sysinfo::{STACK_BASE, get_stack_pointer};
-use kernel::tasks::task::{HIGH_PRIORITY, NORMAL_PRIORITY};
+use kernel::tasks::task::{BOOT_IST_STACK, INTERRUPT_STACK_SIZE, NORMAL_PRIORITY};
 use kernel::tasks::{init, scheduler};
 use kernel::{BootStack, KERNEL_STACK, interrupts as kernel_interrupts};
 use kernel::{desktop::main::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
-use kernel::{gdt::GDT, interrupts::syscall_handler_asm};
+// use kernel::{gdt::GDT, interrupts::syscall_handler_asm};
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 use kernel::{allocator, memory};
 use x86_64::VirtAddr;
 use x86_64::instructions::interrupts;
-use x86_64::registers::{
-    control::{Efer, EferFlags},
-    model_specific::{LStar, SFMask, Star},
-    rflags::RFlags,
-};
+// use x86_64::registers::{
+//     control::{Efer, EferFlags},
+//     model_specific::{LStar, SFMask, Star},
+//     rflags::RFlags,
+// };
 extern "C" fn foo() {
-    for _i in 0..5 {
+    for _i in 0..500 {
         serial_println!("hello from task {}", scheduler::get_current_taskid());
-        scheduler::reschedule();
     }
 }
 
@@ -62,17 +61,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     let frame = boot_info.framebuffer.as_mut().unwrap();
 
-    // Enable syscalls
-    unsafe {
-        Efer::update(|e| *e |= EferFlags::SYSTEM_CALL_EXTENSIONS);
-        LStar::write(VirtAddr::new(syscall_handler_asm as u64));
-        SFMask::write(RFlags::INTERRUPT_FLAG);
+    // // Enable syscalls
+    // unsafe {
+    //     Efer::update(|e| *e |= EferFlags::SYSTEM_CALL_EXTENSIONS);
+    //     LStar::write(VirtAddr::new(syscall_handler_asm as u64));
+    //     SFMask::write(RFlags::INTERRUPT_FLAG);
 
-        match Star::write(GDT.1.user_code, GDT.1.user_data, GDT.1.code, GDT.1.data) {
-            Ok(()) => serial_println!("Star MSRs written successfully"),
-            Err(e) => panic!("Failed to write Star MSRs: {}", e),
-        }
-    }
+    //     match Star::write(GDT.1.user_code, GDT.1.user_data, GDT.1.code, GDT.1.data) {
+    //         Ok(()) => serial_println!("Star MSRs written successfully"),
+    //         Err(e) => panic!("Failed to write Star MSRs: {}", e),
+    //     }
+    // }
 
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
 
@@ -105,15 +104,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     for _i in 0..2 {
         scheduler::spawn(foo, NORMAL_PRIORITY).unwrap();
     }
-    scheduler::spawn(foo, HIGH_PRIORITY).unwrap();
 
     serial_println!("Reschedule...");
+
+    interrupts::enable();
 
     scheduler::reschedule();
 
     serial_println!("Returned to kernel_main!");
 
-    kernel_interrupts::init_mouse();
+    panic!("Kernel main returned!");
+
+    // kernel_interrupts::init_mouse();
 
     // Some tests for the heap allocator
     let heap_value = alloc::boxed::Box::new(41);
@@ -165,5 +167,11 @@ fn get_boot_stack(_regions: &[MemoryRegion]) -> BootStack {
     return BootStack::new(
         VirtAddr::new(0x8e0000),
         VirtAddr::new(0x8e0000 + STACK_SIZE as u64),
+        VirtAddr::new((BOOT_IST_STACK.0.as_ptr() as usize).try_into().unwrap()),
+        VirtAddr::new(
+            (BOOT_IST_STACK.0.as_ptr() as usize + INTERRUPT_STACK_SIZE)
+                .try_into()
+                .unwrap(),
+        ),
     );
 }

@@ -1,3 +1,4 @@
+use crate::gdt::set_current_kernel_stack;
 use core::arch::naked_asm;
 
 macro_rules! save_context {
@@ -70,6 +71,9 @@ pub(crate) unsafe extern "C" fn switch(_old_stack: *mut usize, _new_stack: usize
         "mov [rdi], rsp",
         // Set `rsp` to `new_stack`
         "mov rsp, rsi",
+        // set stack pointer in TSS
+        "call {set_stack}",
         restore_context!(),
+        set_stack = sym set_current_kernel_stack,
     );
 }

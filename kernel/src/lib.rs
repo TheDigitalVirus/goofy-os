@@ -32,6 +32,7 @@ pub mod framebuffer;
 pub mod fs;
 pub mod gdt;
 pub mod interrupts;
+pub mod irq;
 pub mod memory;
 pub mod serial;
 pub mod surface;
@@ -72,20 +73,53 @@ pub(crate) fn lsb(i: usize) -> usize {
     ret
 }
 
+/// Search the most significant bit
+#[inline(always)]
+pub(crate) fn msb(value: usize) -> Option<usize> {
+    if value > 0 {
+        let ret: usize;
+
+        unsafe {
+            asm!("bsr {0}, {1}",
+                out(reg) ret,
+                in(reg) value,
+                options(nomem, nostack)
+            );
+        }
+        Some(ret)
+    } else {
+        None
+    }
+}
+
 pub trait Stack {
     fn top(&self) -> VirtAddr;
     fn bottom(&self) -> VirtAddr;
+    fn interrupt_top(&self) -> VirtAddr;
+    fn interrupt_bottom(&self) -> VirtAddr;
 }
 
 #[derive(Copy, Clone)]
 pub struct BootStack {
     pub start: VirtAddr,
     pub end: VirtAddr,
+    pub ist_start: VirtAddr,
+    pub ist_end: VirtAddr,
 }
 
 impl BootStack {
-    pub const fn new(start: VirtAddr, end: VirtAddr) -> Self {
-        Self { start, end }
+    pub const fn new(
+        start: VirtAddr,
+        end: VirtAddr,
+        ist_start: VirtAddr,
+        ist_end: VirtAddr,
+    ) -> Self {
+        Self {
+            start,
+            end,
+            ist_start,
+            ist_end,
+        }
     }
 }
 
@@ -96,6 +130,14 @@ impl Stack for BootStack {
 
     fn bottom(&self) -> VirtAddr {
         self.start
+    }
+
+    fn interrupt_top(&self) -> VirtAddr {
+        self.ist_end - 16u64
+    }
+
+    fn interrupt_bottom(&self) -> VirtAddr {
+        self.ist_start
     }
 }
 

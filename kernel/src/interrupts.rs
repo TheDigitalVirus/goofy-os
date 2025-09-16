@@ -159,6 +159,8 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
 
     #[cfg(uefi)]
     apic::end_interrupt();
+
+    crate::tasks::scheduler::schedule();
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {

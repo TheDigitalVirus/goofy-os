@@ -5,9 +5,12 @@ use core::cell::RefCell;
 use core::fmt;
 use x86_64::VirtAddr;
 
-use crate::{KERNEL_STACK, Stack};
+use crate::{KERNEL_STACK, Stack, msb};
 
 pub const STACK_SIZE: usize = 1024 * 16; // 16 KB
+pub const INTERRUPT_STACK_SIZE: usize = STACK_SIZE; // Idk, just use the same size for now
+
+pub const BOOT_IST_STACK: ([u8; INTERRUPT_STACK_SIZE],) = ([0; INTERRUPT_STACK_SIZE],);
 
 /// The status of the task - used for scheduling
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -15,6 +18,7 @@ pub(crate) enum TaskStatus {
     Invalid,
     Ready,
     Running,
+    Blocked,
     Finished,
     Idle,
 }
@@ -60,33 +64,72 @@ impl alloc::fmt::Display for TaskPriority {
 }
 
 pub const NO_PRIORITIES: usize = 32;
-pub const REALTIME_PRIORITY: TaskPriority = TaskPriority::from(0);
-pub const HIGH_PRIORITY: TaskPriority = TaskPriority::from(0);
-pub const NORMAL_PRIORITY: TaskPriority = TaskPriority::from(24);
-pub const LOW_PRIORITY: TaskPriority = TaskPriority::from(NO_PRIORITIES as u8 - 1);
+pub const REALTIME_PRIORITY: TaskPriority = TaskPriority::from(NO_PRIORITIES as u8 - 1);
+pub const HIGH_PRIORITY: TaskPriority = TaskPriority::from(24);
+pub const NORMAL_PRIORITY: TaskPriority = TaskPriority::from(16);
+pub const LOW_PRIORITY: TaskPriority = TaskPriority::from(0);
+
+/// Realize a priority queue for tasks
+pub(crate) struct PriorityTaskQueue {
+    queues: [VecDeque<Rc<RefCell<Task>>>; NO_PRIORITIES],
+    prio_bitmap: usize,
+}
+
+impl PriorityTaskQueue {
+    /// Creates an empty priority queue for tasks
+    pub const fn new() -> PriorityTaskQueue {
+        const VALUE: VecDeque<Rc<RefCell<Task>>> = VecDeque::new();
+
+        PriorityTaskQueue {
+            queues: [VALUE; NO_PRIORITIES],
+            prio_bitmap: 0,
+        }
+    }
+
+    /// Add a task by its priority to the queue
+    pub fn push(&mut self, task: Rc<RefCell<Task>>) {
+        let i: usize = task.borrow().prio.into().into();
+        //assert!(i < NO_PRIORITIES, "Priority {} is too high", i);
+
+        self.prio_bitmap |= 1 << i;
+        self.queues[i].push_back(task.clone());
+    }
+
+    fn pop_from_queue(&mut self, queue_index: usize) -> Option<Rc<RefCell<Task>>> {
+        let task = self.queues[queue_index].pop_front();
+        if self.queues[queue_index].is_empty() {
+            self.prio_bitmap &= !(1 << queue_index);
+        }
+
+        task
+    }
+
+    /// Pop the task with the highest priority from the queue
+    pub fn pop(&mut self) -> Option<Rc<RefCell<Task>>> {
+        if let Some(i) = msb(self.prio_bitmap) {
+            return self.pop_from_queue(i);
+        }
+
+        None
+    }
+
+    /// Pop the next task, which has a higher or the same priority as `prio`
+    pub fn pop_with_prio(&mut self, prio: TaskPriority) -> Option<Rc<RefCell<Task>>> {
+        if let Some(i) = msb(self.prio_bitmap) {
+            if i >= prio.into().into() {
+                return self.pop_from_queue(i);
+            }
+        }
+
+        None
+    }
+}
 
 #[derive(Copy, Clone)]
 #[repr(C, align(64))]
 pub(crate) struct TaskStack {
     buffer: [u8; STACK_SIZE],
-}
-
-impl TaskStack {
-    pub const fn new() -> Self {
-        Self {
-            buffer: [0; STACK_SIZE],
-        }
-    }
-}
-
-impl Stack for TaskStack {
-    fn top(&self) -> VirtAddr {
-        VirtAddr::new((&(self.buffer[STACK_SIZE - 16]) as *const _) as u64)
-    }
-
-    fn bottom(&self) -> VirtAddr {
-        VirtAddr::new((&(self.buffer[0]) as *const _) as u64)
-    }
+    ist_buffer: [u8; INTERRUPT_STACK_SIZE],
 }
 
 impl Default for TaskStack {
@@ -95,25 +138,30 @@ impl Default for TaskStack {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct TaskQueue {
-    queue: VecDeque<Rc<RefCell<Task>>>,
+impl TaskStack {
+    pub const fn new() -> TaskStack {
+        TaskStack {
+            buffer: [0; STACK_SIZE],
+            ist_buffer: [0; INTERRUPT_STACK_SIZE],
+        }
+    }
 }
 
-impl TaskQueue {
-    /// Add a task to the queue
-    pub fn push(&mut self, task: Rc<RefCell<Task>>) {
-        self.queue.push_back(task);
+impl Stack for TaskStack {
+    fn top(&self) -> VirtAddr {
+        VirtAddr::new(self.buffer.as_ptr() as u64 + STACK_SIZE as u64 - 16)
     }
 
-    /// Pop the task from the queue
-    pub fn pop(&mut self) -> Option<Rc<RefCell<Task>>> {
-        self.queue.pop_front()
+    fn bottom(&self) -> VirtAddr {
+        VirtAddr::new(self.buffer.as_ptr() as u64)
     }
 
-    #[inline(always)]
-    pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
+    fn interrupt_top(&self) -> VirtAddr {
+        VirtAddr::new(self.ist_buffer.as_ptr() as u64 + INTERRUPT_STACK_SIZE as u64 - 16)
+    }
+
+    fn interrupt_bottom(&self) -> VirtAddr {
+        VirtAddr::new(self.ist_buffer.as_ptr() as u64)
     }
 }
 
@@ -133,8 +181,8 @@ pub(crate) struct Task {
 }
 
 impl Task {
-    pub fn new_idle(id: TaskId) -> Self {
-        Self {
+    pub fn new_idle(id: TaskId) -> Task {
+        Task {
             id,
             prio: LOW_PRIORITY,
             status: TaskStatus::Idle,
@@ -143,8 +191,8 @@ impl Task {
         }
     }
 
-    pub fn new(id: TaskId, status: TaskStatus, prio: TaskPriority) -> Self {
-        Self {
+    pub fn new(id: TaskId, status: TaskStatus, prio: TaskPriority) -> Task {
+        Task {
             id,
             prio,
             status,

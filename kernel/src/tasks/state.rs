@@ -70,7 +70,7 @@ impl TaskFrame for Task {
             (*state).rbp = (*state).rsp + size_of::<u64>() as u64;
 
             (*state).rip = (func as *const ()) as u64;
-            (*state).rflags = 0x1002u64;
+            (*state).rflags = 0x1202u64; // 0x1002 | 0x200 (IF flag) to enable interrupts
 
             /* Set the task's stack pointer entry to the stack we have crafted right now. */
             self.last_stack_pointer = stack as usize;

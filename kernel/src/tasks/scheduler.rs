@@ -1,13 +1,15 @@
 use crate::errno::{Error, Result};
-use crate::tasks::task::{LOW_PRIORITY, NO_PRIORITIES, TaskFrame, TaskPriority};
+use crate::irq::irqsave;
+use crate::tasks::task::{NO_PRIORITIES, PriorityTaskQueue, TaskFrame, TaskPriority};
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::rc::Rc;
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicU32, Ordering};
+use x86_64::VirtAddr;
 
+use crate::serial_println;
 use crate::tasks::switch::switch;
-use crate::tasks::task::{Task, TaskId, TaskQueue, TaskStatus};
-use crate::{lsb, serial_println};
+use crate::tasks::task::{Task, TaskId, TaskStatus};
 
 static TID_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -17,12 +19,10 @@ pub(crate) struct Scheduler {
     /// task id of the idle task
     idle_task: Rc<RefCell<Task>>,
     /// queue of tasks, which are ready
-    ready_queues: [TaskQueue; NO_PRIORITIES],
-    /// Bitmap to show, which queue is used
-    prio_bitmap: usize,
+    ready_queue: PriorityTaskQueue,
     /// queue of tasks, which are finished and can be released
     finished_tasks: VecDeque<TaskId>,
-    /// map between task id and task control block
+    // map between task id and task control block
     tasks: BTreeMap<TaskId, Rc<RefCell<Task>>>,
 }
 
@@ -37,8 +37,7 @@ impl Scheduler {
         Scheduler {
             current_task: idle_task.clone(),
             idle_task: idle_task.clone(),
-            ready_queues: Default::default(),
-            prio_bitmap: 0,
+            ready_queue: PriorityTaskQueue::new(),
             finished_tasks: VecDeque::<TaskId>::new(),
             tasks,
         }
@@ -55,65 +54,107 @@ impl Scheduler {
     }
 
     pub fn spawn(&mut self, func: extern "C" fn(), prio: TaskPriority) -> Result<TaskId> {
-        let prio_number = prio.into() as usize;
+        let closure = || {
+            let prio_number: usize = prio.into().into();
 
-        if prio_number >= NO_PRIORITIES {
-            return Err(Error::BadPriority);
-        }
+            if prio_number >= NO_PRIORITIES {
+                return Err(Error::BadPriority);
+            }
 
-        // Create the new task.
-        let tid = self.get_tid();
-        let task = Rc::new(RefCell::new(Task::new(tid, TaskStatus::Ready, prio)));
+            // Create the new task.
+            let tid = self.get_tid();
+            let task = Rc::new(RefCell::new(Task::new(tid, TaskStatus::Ready, prio)));
 
-        task.borrow_mut().create_stack_frame(func);
+            task.borrow_mut().create_stack_frame(func);
 
-        // Add it to the task lists.
-        self.ready_queues[prio_number].push(task.clone());
-        self.prio_bitmap |= 1 << prio_number;
-        self.tasks.insert(tid, task);
+            // Add it to the task lists.
+            self.ready_queue.push(task.clone());
+            self.tasks.insert(tid, task);
 
-        serial_println!("Creating task {}", tid);
+            serial_println!("Creating task {}", tid);
 
-        Ok(tid)
+            Ok(tid)
+        };
+
+        irqsave(closure)
     }
 
     pub fn exit(&mut self) -> ! {
-        if self.current_task.borrow().status != TaskStatus::Idle {
-            serial_println!("finish task with id {}", self.current_task.borrow().id);
-            self.current_task.borrow_mut().status = TaskStatus::Finished;
-        } else {
-            panic!("unable to terminate idle task");
-        }
+        let closure = || {
+            if self.current_task.borrow().status != TaskStatus::Idle {
+                serial_println!("finish task with id {}", self.current_task.borrow().id);
+                self.current_task.borrow_mut().status = TaskStatus::Finished;
+            } else {
+                panic!("unable to terminate idle task");
+            }
+        };
+
+        irqsave(closure);
 
         self.reschedule();
 
-        panic!("Terminated task gets computation time");
+        // we should never reach this point
+        panic!("exit failed!");
+    }
+
+    pub fn abort(&mut self) -> ! {
+        let closure = || {
+            if self.current_task.borrow().status != TaskStatus::Idle {
+                serial_println!("abort task with id {}", self.current_task.borrow().id);
+                self.current_task.borrow_mut().status = TaskStatus::Finished;
+            } else {
+                panic!("unable to terminate idle task");
+            }
+        };
+
+        irqsave(closure);
+
+        self.reschedule();
+
+        // we should never reach this point
+        panic!("abort failed!");
+    }
+
+    pub fn block_current_task(&mut self) -> Rc<RefCell<Task>> {
+        let closure = || {
+            if self.current_task.borrow().status == TaskStatus::Running {
+                serial_println!("block task {}", self.current_task.borrow().id);
+
+                self.current_task.borrow_mut().status = TaskStatus::Blocked;
+                self.current_task.clone()
+            } else {
+                panic!("unable to block task {}", self.current_task.borrow().id);
+            }
+        };
+
+        irqsave(closure)
+    }
+
+    pub fn wakeup_task(&mut self, task: Rc<RefCell<Task>>) {
+        let closure = || {
+            if task.borrow().status == TaskStatus::Blocked {
+                serial_println!("wakeup task {}", task.borrow().id);
+
+                task.borrow_mut().status = TaskStatus::Ready;
+                self.ready_queue.push(task.clone());
+            }
+        };
+
+        irqsave(closure);
     }
 
     pub fn get_current_taskid(&self) -> TaskId {
-        self.current_task.borrow().id
+        irqsave(|| self.current_task.borrow().id)
     }
 
-    /// determine the next task, which is ready and priority is a greater than or equal to prio
-    fn get_next_task(&mut self, prio: TaskPriority) -> Option<Rc<RefCell<Task>>> {
-        let i = lsb(self.prio_bitmap);
-        let mut task = None;
-
-        if i <= prio.into().into() {
-            task = self.ready_queues[i].pop();
-
-            // clear bitmap entry for the priority i if the queues is empty
-            if self.ready_queues[i].is_empty() {
-                self.prio_bitmap &= !(1 << i);
-            }
-        }
-
-        task
+    /// Determines the start address of the stack
+    pub fn get_current_interrupt_stack(&self) -> VirtAddr {
+        irqsave(|| (*self.current_task.borrow().stack).interrupt_top())
     }
 
     pub fn schedule(&mut self) {
         // do we have finished tasks? => drop tasks => deallocate implicitly the stack
-        while let Some(id) = self.finished_tasks.pop_front() {
+        if let Some(id) = self.finished_tasks.pop_front() {
             if self.tasks.remove(&id).is_none() {
                 serial_println!("[warn] Unable to drop task {}", id);
             } else {
@@ -135,9 +176,9 @@ impl Scheduler {
         // do we have a task, which is ready?
         let mut next_task;
         if current_status == TaskStatus::Running {
-            next_task = self.get_next_task(current_prio);
+            next_task = self.ready_queue.pop_with_prio(current_prio);
         } else {
-            next_task = self.get_next_task(LOW_PRIORITY);
+            next_task = self.ready_queue.pop();
         }
 
         if next_task.is_none()
@@ -150,18 +191,16 @@ impl Scheduler {
             next_task = Some(self.idle_task.clone());
         }
 
-        if let Some(next_task) = next_task {
+        if let Some(new_task) = next_task {
             let (new_id, new_stack_pointer) = {
-                let mut borrowed = next_task.borrow_mut();
+                let mut borrowed = new_task.borrow_mut();
                 borrowed.status = TaskStatus::Running;
                 (borrowed.id, borrowed.last_stack_pointer)
             };
 
             if current_status == TaskStatus::Running {
-                serial_println!("Add task {} to ready queue", current_id);
                 self.current_task.borrow_mut().status = TaskStatus::Ready;
-                self.ready_queues[current_prio.into() as usize].push(self.current_task.clone());
-                self.prio_bitmap |= 1 << current_prio.into() as usize;
+                self.ready_queue.push(self.current_task.clone());
             } else if current_status == TaskStatus::Finished {
                 serial_println!("Task {} finished", current_id);
                 self.current_task.borrow_mut().status = TaskStatus::Invalid;
@@ -179,7 +218,7 @@ impl Scheduler {
                 new_stack_pointer
             );
 
-            self.current_task = next_task;
+            self.current_task = new_task;
 
             unsafe {
                 switch(current_stack_pointer, new_stack_pointer);
@@ -188,7 +227,7 @@ impl Scheduler {
     }
 
     pub fn reschedule(&mut self) {
-        self.schedule();
+        irqsave(|| self.schedule());
     }
 }
 
@@ -211,11 +250,33 @@ pub fn reschedule() {
     unsafe { SCHEDULER.as_mut().unwrap().reschedule() }
 }
 
+/// Timer interrupt  call scheduler to switch to the next available task
+pub(crate) fn schedule() {
+    unsafe { SCHEDULER.as_mut().unwrap().schedule() }
+}
+
 /// Terminate the current running task
 pub fn do_exit() -> ! {
     unsafe {
         SCHEDULER.as_mut().unwrap().exit();
     }
+}
+
+/// Terminate the current running task
+pub fn abort() -> ! {
+    unsafe { SCHEDULER.as_mut().unwrap().abort() }
+}
+
+pub(crate) fn get_current_interrupt_stack() -> VirtAddr {
+    unsafe { SCHEDULER.as_mut().unwrap().get_current_interrupt_stack() }
+}
+
+pub(crate) fn block_current_task() -> Rc<RefCell<Task>> {
+    unsafe { SCHEDULER.as_mut().unwrap().block_current_task() }
+}
+
+pub(crate) fn wakeup_task(task: Rc<RefCell<Task>>) {
+    unsafe { SCHEDULER.as_mut().unwrap().wakeup_task(task) }
 }
 
 /// Get the TaskID of the current running task

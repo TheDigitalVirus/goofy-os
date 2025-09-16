@@ -31,7 +31,7 @@ use x86_64::instructions::interrupts;
 //     rflags::RFlags,
 // };
 extern "C" fn foo() {
-    for _i in 0..500 {
+    for _i in 0..25 {
         serial_println!("hello from task {}", scheduler::get_current_taskid());
     }
 }
@@ -107,15 +107,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     serial_println!("Reschedule...");
 
+    kernel_interrupts::init_mouse();
+
     interrupts::enable();
 
     scheduler::reschedule();
 
     serial_println!("Returned to kernel_main!");
-
-    panic!("Kernel main returned!");
-
-    // kernel_interrupts::init_mouse();
 
     // Some tests for the heap allocator
     let heap_value = alloc::boxed::Box::new(41);

@@ -160,7 +160,7 @@ unsafe fn init_local_apic(
     unsafe {
         init_timer(lapic_pointer);
         init_keyboard(lapic_pointer);
-        // init_mouse(lapic_pointer);
+        init_mouse(lapic_pointer);
     };
 }
 

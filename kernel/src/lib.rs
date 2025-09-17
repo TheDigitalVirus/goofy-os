@@ -12,14 +12,23 @@
 #[cfg(test)]
 use bootloader_api::{BootInfo, entry_point};
 use conquer_once::spin::OnceCell;
+use raw_cpuid::CpuId;
 use x86_64::{
     VirtAddr,
-    registers::control::{Cr0, Cr0Flags},
+    registers::control::{Cr0, Cr0Flags, Cr3, Cr4, Cr4Flags},
 };
 
 use core::arch::asm;
 use core::panic::PanicInfo;
 use exit::{QemuExitCode, exit_qemu};
+
+use crate::{gdt::GDT, tasks::syscall::syscall_handler};
+
+use x86_64::registers::{
+    control::{Efer, EferFlags},
+    model_specific::{LStar, SFMask, Star},
+    rflags::RFlags,
+};
 
 extern crate alloc;
 
@@ -36,6 +45,7 @@ pub mod irq;
 pub mod memory;
 pub mod serial;
 pub mod surface;
+pub mod syscalls;
 pub mod sysinfo;
 pub mod time;
 
@@ -145,6 +155,9 @@ pub fn init(physical_memory_offset: x86_64::VirtAddr) {
     // Initialize the physical memory offset
     PHYSICAL_MEMORY_OFFSET.init_once(|| physical_memory_offset);
 
+    interrupts::init_idt();
+    gdt::init();
+
     unsafe {
         Cr0::update(|cr0| {
             *cr0 |= Cr0Flags::ALIGNMENT_MASK;
@@ -152,11 +165,78 @@ pub fn init(physical_memory_offset: x86_64::VirtAddr) {
             *cr0 |= Cr0Flags::MONITOR_COPROCESSOR;
             // enable cache
             *cr0 &= !(Cr0Flags::CACHE_DISABLE | Cr0Flags::NOT_WRITE_THROUGH);
-        })
+        });
+
+        let cpuid = CpuId::new();
+
+        Cr4::update(|cr4| {
+            // disable performance monitoring counter
+            // allow the usage of rdtsc in user space
+            *cr4 &= !(Cr4Flags::PERFORMANCE_MONITOR_COUNTER | Cr4Flags::TIMESTAMP_DISABLE);
+
+            let has_pge = match cpuid.get_feature_info() {
+                Some(finfo) => finfo.has_pge(),
+                None => false,
+            };
+
+            if has_pge {
+                *cr4 |= Cr4Flags::PAGE_GLOBAL; // enable global pages
+            }
+
+            let has_fsgsbase = match cpuid.get_extended_feature_info() {
+                Some(efinfo) => efinfo.has_fsgsbase(),
+                None => false,
+            };
+
+            if has_fsgsbase {
+                *cr4 |= Cr4Flags::FSGSBASE;
+            }
+
+            let has_mce = match cpuid.get_feature_info() {
+                Some(finfo) => finfo.has_mce(),
+                None => false,
+            };
+
+            if has_mce {
+                *cr4 |= Cr4Flags::MACHINE_CHECK_EXCEPTION; // enable machine check exceptions
+            }
+        });
     };
 
-    interrupts::init_idt();
-    gdt::init();
+    // Enable syscalls
+    unsafe {
+        serial_println!("User code segment: {:#x}", GDT.1.user_code.0);
+        serial_println!("User data segment: {:#x}", GDT.1.user_data.0);
+        serial_println!("Kernel code segment: {:#x}", GDT.1.code.0);
+        serial_println!("Kernel data segment: {:#x}", GDT.1.data.0);
+
+        Efer::update(|e| *e |= EferFlags::SYSTEM_CALL_EXTENSIONS);
+        LStar::write(VirtAddr::new(syscall_handler as u64));
+        SFMask::write(RFlags::INTERRUPT_FLAG);
+
+        match Star::write(GDT.1.user_code, GDT.1.user_data, GDT.1.code, GDT.1.data) {
+            Ok(()) => serial_println!("Star MSRs written successfully"),
+            Err(e) => panic!("Failed to write Star MSRs: {}", e),
+        }
+    }
+
+    // dirty hack for the demo, only necessary for qemu
+    // => enable access for the user space
+    if Cr3::read_raw().1 == 0x1000 {
+        serial_println!("Applying page table hack for QEMU");
+
+        let p0 = unsafe { core::slice::from_raw_parts_mut(0x3000 as *mut usize, 512) };
+        for entry in p0 {
+            if *entry != 0 {
+                *entry |= 1 << 2;
+            }
+        }
+
+        unsafe {
+            // flush tlb
+            Cr3::write_raw(Cr3::read_raw().0, Cr3::read_raw().1);
+        }
+    }
 
     #[cfg(not(uefi))]
     unsafe {

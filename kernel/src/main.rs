@@ -6,6 +6,7 @@
 
 use core::ops::Deref;
 use core::panic::PanicInfo;
+use kernel::tasks::{syscall0, syscall2}; // Rust being weird
 
 extern crate alloc;
 
@@ -14,26 +15,39 @@ use bootloader_api::{BootInfo, entry_point};
 #[cfg(uefi)]
 use kernel::apic;
 use kernel::gdt::STACK_SIZE;
+use kernel::syscalls::{SYSNO_EXIT, SYSNO_WRITE};
 use kernel::sysinfo::{STACK_BASE, get_stack_pointer};
 use kernel::tasks::task::{BOOT_IST_STACK, INTERRUPT_STACK_SIZE, NORMAL_PRIORITY};
-use kernel::tasks::{init, scheduler};
-use kernel::{BootStack, KERNEL_STACK, interrupts as kernel_interrupts};
+use kernel::tasks::{init, jump_to_user_land, scheduler};
+use kernel::{BootStack, KERNEL_STACK, interrupts as kernel_interrupts, syscall};
 use kernel::{desktop::main::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
-// use kernel::{gdt::GDT, interrupts::syscall_handler_asm};
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 use kernel::{allocator, memory};
 use x86_64::VirtAddr;
 use x86_64::instructions::interrupts;
-// use x86_64::registers::{
-//     control::{Efer, EferFlags},
-//     model_specific::{LStar, SFMask, Star},
-//     rflags::RFlags,
-// };
-extern "C" fn foo() {
-    for _i in 0..25 {
-        serial_println!("hello from task {}", scheduler::get_current_taskid());
+
+extern "C" fn user_foo() {
+    let str = b"Hello from user_foo!\n\0";
+
+    // try to use directly the serial device
+    //println!("Hello from COM1!");
+
+    syscall!(SYSNO_WRITE, str.as_ptr() as u64, str.len());
+    #[allow(forgetting_references)]
+    core::mem::forget(str);
+    syscall!(SYSNO_EXIT);
+}
+
+extern "C" fn create_user_foo() {
+    serial_println!("jump to user land");
+    unsafe {
+        jump_to_user_land(user_foo);
     }
+}
+
+extern "C" fn foo() {
+    println!("hello from task {}", scheduler::get_current_taskid());
 }
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
@@ -60,18 +74,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     KERNEL_STACK.init_once(|| boot_stack);
 
     let frame = boot_info.framebuffer.as_mut().unwrap();
-
-    // // Enable syscalls
-    // unsafe {
-    //     Efer::update(|e| *e |= EferFlags::SYSTEM_CALL_EXTENSIONS);
-    //     LStar::write(VirtAddr::new(syscall_handler_asm as u64));
-    //     SFMask::write(RFlags::INTERRUPT_FLAG);
-
-    //     match Star::write(GDT.1.user_code, GDT.1.user_data, GDT.1.code, GDT.1.data) {
-    //         Ok(()) => serial_println!("Star MSRs written successfully"),
-    //         Err(e) => panic!("Failed to write Star MSRs: {}", e),
-    //     }
-    // }
 
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
 
@@ -104,6 +106,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     for _i in 0..2 {
         scheduler::spawn(foo, NORMAL_PRIORITY).unwrap();
     }
+    scheduler::spawn(create_user_foo, NORMAL_PRIORITY).unwrap();
 
     serial_println!("Reschedule...");
 

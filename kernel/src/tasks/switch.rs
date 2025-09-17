@@ -71,6 +71,10 @@ pub(crate) unsafe extern "C" fn switch(_old_stack: *mut usize, _new_stack: usize
         "mov [rdi], rsp",
         // Set `rsp` to `new_stack`
         "mov rsp, rsi",
+        // Set task switched flag
+        "mov rax, cr0",
+        "or rax, 8",
+        "mov cr0, rax",
         // set stack pointer in TSS
         "call {set_stack}",
         restore_context!(),

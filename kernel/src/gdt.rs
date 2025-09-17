@@ -67,7 +67,7 @@ pub unsafe fn init_gdt() {
 pub struct Selectors {
     pub code: SegmentSelector,
     pub data: SegmentSelector,
-    tss: SegmentSelector,
+    pub tss: SegmentSelector,
     pub user_code: SegmentSelector,
     pub user_data: SegmentSelector,
 }

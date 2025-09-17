@@ -1,5 +1,6 @@
 use crate::errno::{Error, Result};
 use crate::irq::irqsave;
+use crate::tasks::register_task;
 use crate::tasks::task::{NO_PRIORITIES, PriorityTaskQueue, TaskFrame, TaskPriority};
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::rc::Rc;
@@ -238,6 +239,12 @@ pub fn init() {
     unsafe {
         SCHEDULER = Some(Scheduler::new());
     }
+
+    serial_println!("Scheduler initialized");
+
+    register_task();
+
+    serial_println!("Scheduler task registered");
 }
 
 /// Create a new kernel task

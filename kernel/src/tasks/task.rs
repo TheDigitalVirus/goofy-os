@@ -7,11 +7,6 @@ use x86_64::VirtAddr;
 
 use crate::{KERNEL_STACK, Stack, msb};
 
-pub const STACK_SIZE: usize = 1024 * 16; // 16 KB
-pub const INTERRUPT_STACK_SIZE: usize = STACK_SIZE; // Idk, just use the same size for now
-
-pub const BOOT_IST_STACK: ([u8; INTERRUPT_STACK_SIZE],) = ([0; INTERRUPT_STACK_SIZE],);
-
 /// The status of the task - used for scheduling
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum TaskStatus {

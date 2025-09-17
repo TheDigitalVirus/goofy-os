@@ -6,7 +6,6 @@
 
 use core::ops::Deref;
 use core::panic::PanicInfo;
-use kernel::tasks::{syscall0, syscall2}; // Rust being weird
 
 extern crate alloc;
 
@@ -15,11 +14,22 @@ use bootloader_api::{BootInfo, entry_point};
 #[cfg(uefi)]
 use kernel::apic;
 use kernel::gdt::STACK_SIZE;
+
+#[cfg(processes_enabled)]
 use kernel::syscalls::{SYSNO_EXIT, SYSNO_WRITE};
+
 use kernel::sysinfo::{STACK_BASE, get_stack_pointer};
-use kernel::tasks::task::{BOOT_IST_STACK, INTERRUPT_STACK_SIZE, NORMAL_PRIORITY};
-use kernel::tasks::{init, jump_to_user_land, scheduler};
-use kernel::{BootStack, KERNEL_STACK, interrupts as kernel_interrupts, syscall};
+
+#[cfg(processes_enabled)]
+use kernel::syscall;
+#[cfg(processes_enabled)]
+use kernel::tasks::task::NORMAL_PRIORITY;
+#[cfg(processes_enabled)]
+use kernel::tasks::{init, jump_to_user_land, scheduler, syscall0, syscall2};
+
+use kernel::{BOOT_IST_STACK, INTERRUPT_STACK_SIZE};
+
+use kernel::{BootStack, KERNEL_STACK, interrupts as kernel_interrupts};
 use kernel::{desktop::main::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
@@ -27,6 +37,7 @@ use kernel::{allocator, memory};
 use x86_64::VirtAddr;
 use x86_64::instructions::interrupts;
 
+#[cfg(processes_enabled)]
 extern "C" fn user_foo() {
     let str = b"Hello from user_foo!\n\0";
 
@@ -39,6 +50,7 @@ extern "C" fn user_foo() {
     syscall!(SYSNO_EXIT);
 }
 
+#[cfg(processes_enabled)]
 extern "C" fn create_user_foo() {
     serial_println!("jump to user land");
     unsafe {
@@ -46,6 +58,7 @@ extern "C" fn create_user_foo() {
     }
 }
 
+#[cfg(processes_enabled)]
 extern "C" fn foo() {
     println!("hello from task {}", scheduler::get_current_taskid());
 }
@@ -99,24 +112,31 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         };
     };
 
-    serial_println!("Init scheduler...");
-    init();
-    serial_println!("Spawn tasks...");
+    #[cfg(processes_enabled)]
+    {
+        serial_println!("Init scheduler...");
+        init();
+        serial_println!("Spawn tasks...");
 
-    for _i in 0..2 {
-        scheduler::spawn(foo, NORMAL_PRIORITY).unwrap();
+        for _i in 0..2 {
+            scheduler::spawn(foo, NORMAL_PRIORITY).unwrap();
+        }
+        scheduler::spawn(create_user_foo, NORMAL_PRIORITY).unwrap();
+
+        serial_println!("Reschedule...");
+
+        kernel_interrupts::init_mouse();
+        interrupts::enable();
+
+        scheduler::reschedule();
+        serial_println!("Returned to kernel_main!");
     }
-    scheduler::spawn(create_user_foo, NORMAL_PRIORITY).unwrap();
 
-    serial_println!("Reschedule...");
-
-    kernel_interrupts::init_mouse();
-
-    interrupts::enable();
-
-    scheduler::reschedule();
-
-    serial_println!("Returned to kernel_main!");
+    #[cfg(not(processes_enabled))]
+    {
+        kernel_interrupts::init_mouse();
+        interrupts::enable();
+    }
 
     // Some tests for the heap allocator
     let heap_value = alloc::boxed::Box::new(41);

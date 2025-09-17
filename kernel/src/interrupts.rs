@@ -1,7 +1,13 @@
 #[cfg(uefi)]
 use crate::apic;
 use crate::{hlt_loop, println, serial_println};
-use core::{arch::asm, u64};
+use core::u64;
+
+#[cfg(processes_enabled)]
+use core::arch::asm;
+
+#[cfg(processes_enabled)]
+use x86_64::instructions::interrupts;
 
 use lazy_static::lazy_static;
 #[cfg(not(uefi))]
@@ -10,7 +16,7 @@ use ps2_mouse::{Mouse, MouseState};
 use spin::{self, lazy::Lazy};
 use spinning_top::Spinlock;
 use x86_64::{
-    instructions::{interrupts, port::PortReadOnly},
+    instructions::port::PortReadOnly,
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
 };
 
@@ -21,6 +27,7 @@ pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 pub const KEYBOARD_INTERRUPT: u8 = PIC_1_OFFSET + 1;
 pub const MOUSE_INTERRUPT: u8 = PIC_1_OFFSET + 12;
 
+#[cfg(processes_enabled)]
 const PROCESS_EXITED: u64 = u64::MAX;
 
 #[cfg(not(uefi))]
@@ -160,6 +167,7 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     #[cfg(uefi)]
     apic::end_interrupt();
 
+    #[cfg(processes_enabled)]
     crate::tasks::scheduler::schedule();
 }
 

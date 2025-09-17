@@ -4,6 +4,8 @@ use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector
 use x86_64::structures::tss::TaskStateSegment;
 
 use crate::KERNEL_STACK;
+
+#[cfg(processes_enabled)]
 use crate::tasks::scheduler::get_current_interrupt_stack;
 
 pub const STACK_SIZE: usize = 1024 * 100; // 100 KB
@@ -88,10 +90,12 @@ pub fn init() {
     }
 }
 
+#[cfg(processes_enabled)]
 pub unsafe extern "C" fn set_current_kernel_stack() {
     unsafe { set_kernel_stack(get_current_interrupt_stack()) };
 }
 
+#[cfg(processes_enabled)]
 #[inline(always)]
 unsafe fn set_kernel_stack(stack: VirtAddr) {
     unsafe { TSS.privilege_stack_table[0] = stack };

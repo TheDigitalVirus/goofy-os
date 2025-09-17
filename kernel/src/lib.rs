@@ -22,8 +22,10 @@ use core::arch::asm;
 use core::panic::PanicInfo;
 use exit::{QemuExitCode, exit_qemu};
 
-use crate::{gdt::GDT, tasks::syscall::syscall_handler};
+#[cfg(processes_enabled)]
+use crate::gdt::GDT;
 
+#[cfg(processes_enabled)]
 use x86_64::registers::{
     control::{Efer, EferFlags},
     model_specific::{LStar, SFMask, Star},
@@ -45,12 +47,15 @@ pub mod irq;
 pub mod memory;
 pub mod serial;
 pub mod surface;
-pub mod syscalls;
 pub mod sysinfo;
 pub mod time;
 
-// #[cfg(processes_enabled)]
+#[cfg(processes_enabled)]
+pub mod syscalls;
+#[cfg(processes_enabled)]
 pub mod tasks;
+#[cfg(processes_enabled)]
+use tasks::syscall::syscall_handler;
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 
@@ -63,8 +68,14 @@ pub static BOOTLOADER_CONFIG: BootloaderConfig = {
 pub static PHYSICAL_MEMORY_OFFSET: OnceCell<x86_64::VirtAddr> = OnceCell::uninit();
 pub static KERNEL_STACK: OnceCell<BootStack> = OnceCell::uninit();
 
+pub const STACK_SIZE: usize = 1024 * 16; // 16 KB
+pub const INTERRUPT_STACK_SIZE: usize = STACK_SIZE; // Idk, just use the same size for now
+
+pub const BOOT_IST_STACK: ([u8; INTERRUPT_STACK_SIZE],) = ([0; INTERRUPT_STACK_SIZE],);
+
 /// Search the least significant bit
 #[inline(always)]
+#[allow(dead_code)]
 pub(crate) fn lsb(i: usize) -> usize {
     let ret;
 
@@ -85,6 +96,7 @@ pub(crate) fn lsb(i: usize) -> usize {
 
 /// Search the most significant bit
 #[inline(always)]
+#[allow(dead_code)]
 pub(crate) fn msb(value: usize) -> Option<usize> {
     if value > 0 {
         let ret: usize;
@@ -203,6 +215,7 @@ pub fn init(physical_memory_offset: x86_64::VirtAddr) {
         });
     };
 
+    #[cfg(processes_enabled)]
     // Enable syscalls
     unsafe {
         serial_println!("User code segment: {:#x}", GDT.1.user_code.0);

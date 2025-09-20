@@ -12,6 +12,7 @@ use tinybmp::Bmp;
 use crate::{
     desktop::{
         calculator::Calculator, filemanager::FileManager, notepad::Notepad, sysinfo::SysInfo,
+        tictactoe::TicTacToe,
     },
     framebuffer::{Color, FrameBufferWriter},
     surface::{Rect, Surface},
@@ -28,6 +29,7 @@ pub enum AppType {
     FileManager(FileManager),
     Notepad(Notepad),
     SysInfo(SysInfo),
+    TicTacToe(TicTacToe),
 }
 
 impl Application for AppType {
@@ -37,6 +39,7 @@ impl Application for AppType {
             AppType::FileManager(filemanager) => filemanager.setup_ui(surface),
             AppType::Notepad(notepad) => notepad.init(surface),
             AppType::SysInfo(sysinfo) => sysinfo.init(surface),
+            AppType::TicTacToe(tictactoe) => tictactoe.init(surface),
         }
     }
 
@@ -46,6 +49,7 @@ impl Application for AppType {
             AppType::FileManager(filemanager) => filemanager.render(surface),
             AppType::Notepad(notepad) => notepad.render(surface),
             AppType::SysInfo(sysinfo) => sysinfo.render(surface),
+            AppType::TicTacToe(tictactoe) => tictactoe.render(surface),
         }
     }
 
@@ -59,6 +63,7 @@ impl Application for AppType {
             }
             AppType::Notepad(notepad) => notepad.handle_char_input(c, ctrl_pressed, surface),
             AppType::SysInfo(sysinfo) => sysinfo.handle_char_input(c, ctrl_pressed, surface),
+            AppType::TicTacToe(tictactoe) => tictactoe.handle_char_input(c, ctrl_pressed, surface),
         }
     }
 
@@ -68,6 +73,7 @@ impl Application for AppType {
             AppType::FileManager(filemanager) => filemanager.handle_key_input(key, surface),
             AppType::Notepad(notepad) => notepad.handle_key_input(key, surface),
             AppType::SysInfo(sysinfo) => sysinfo.handle_key_input(key, surface),
+            AppType::TicTacToe(tictactoe) => tictactoe.handle_key_input(key, surface),
         }
     }
 
@@ -77,6 +83,7 @@ impl Application for AppType {
             AppType::FileManager(filemanager) => filemanager.handle_mouse_click(x, y, surface),
             AppType::Notepad(notepad) => notepad.handle_mouse_click(x, y, surface),
             AppType::SysInfo(sysinfo) => sysinfo.handle_mouse_click(x, y, surface),
+            AppType::TicTacToe(tictactoe) => tictactoe.handle_mouse_click(x, y, surface),
         }
     }
 
@@ -86,6 +93,7 @@ impl Application for AppType {
             AppType::FileManager(filemanager) => filemanager.get_title(),
             AppType::Notepad(notepad) => notepad.get_title(),
             AppType::SysInfo(sysinfo) => sysinfo.get_title(),
+            AppType::TicTacToe(tictactoe) => tictactoe.get_title(),
         }
     }
 }
@@ -122,6 +130,7 @@ impl Window {
             AppType::FileManager(_) => Color::new(240, 240, 240),
             AppType::Notepad(_) => Color::WHITE,
             AppType::SysInfo(_) => Color::DARKGRAY,
+            AppType::TicTacToe(_) => Color::new(250, 250, 250),
         };
 
         let surface = Surface::new(width, height, background_color);
@@ -130,6 +139,7 @@ impl Window {
             AppType::FileManager(_) => "filemanager",
             AppType::Notepad(_) => "notepad",
             AppType::SysInfo(_) => "sysinfo",
+            AppType::TicTacToe(_) => "tictactoe",
         });
 
         Self {
@@ -696,6 +706,7 @@ const ICON_CALCULATOR: &[u8] = include_bytes!("../../../icons/calculator.bmp");
 const ICON_FILEMANAGER: &[u8] = include_bytes!("../../../icons/filemanager.bmp");
 const ICON_NOTEPAD: &[u8] = include_bytes!("../../../icons/notepad.bmp");
 const ICON_SYSINFO: &[u8] = include_bytes!("../../../icons/sysinfo.bmp");
+const ICON_TICTACTOE: &[u8] = include_bytes!("../../../icons/tictactoe.bmp");
 const START_ICON: &[u8] = include_bytes!("../../../icons/start.bmp");
 
 pub fn launch_calculator(window_manager: &mut WindowManager) {
@@ -757,14 +768,27 @@ pub fn launch_sysinfo(window_manager: &mut WindowManager) {
         AppType::SysInfo(SysInfo::new(None)),
     ));
 }
+
+pub fn launch_tictactoe(window_manager: &mut WindowManager) {
+    window_manager.add_window(Window::new(
+        250,
+        150,
+        300,
+        400,
+        0, // Will be overridden by add_window
+        "Tic-Tac-Toe".to_string(),
+        AppType::TicTacToe(TicTacToe::new(None)),
+    ));
+}
 pub fn generate_icon_for_app_str<const W: usize, const H: usize>(app: &str) -> Vec<Color> {
     let data = match app {
         "calculator" => ICON_CALCULATOR.to_vec(),
         "filemanager" => ICON_FILEMANAGER.to_vec(),
         "notepad" => ICON_NOTEPAD.to_vec(),
         "sysinfo" => ICON_SYSINFO.to_vec(),
-        "start_icon" => START_ICON.to_vec(), // Reuse filemanager icon for start button
-        _ => vec![0; W * H * 3],             // Default to blank icon
+        "tictactoe" => ICON_TICTACTOE.to_vec(),
+        "start_icon" => START_ICON.to_vec(),
+        _ => vec![0; W * H * 3], // Default to blank icon
     };
 
     let bmp = Bmp::<Rgb888>::from_slice(&data).unwrap();

@@ -6,7 +6,7 @@ use crate::{
         },
         window_manager::{
             WindowManager, generate_icon_for_app_str, launch_calculator, launch_filemanager,
-            launch_notepad, launch_sysinfo,
+            launch_notepad, launch_sysinfo, launch_tictactoe,
         },
     },
     framebuffer::{self, Color, FrameBufferWriter, SCREEN_SIZE},
@@ -290,6 +290,42 @@ pub fn run_desktop() -> ! {
         "System Info",
     ));
 
+    // TicTacToe start button
+    start_menu_entries.push((
+        desktop.add_shape(Shape::Rectangle {
+            x: 10,
+            y: screen_size.1 as usize - 125,
+            width: 180,
+            height: 1,
+            color: Color::BLACK,
+            filled: true,
+            hide: true,
+        }),
+        desktop.add_shape(Shape::Text {
+            x: 40,
+            y: screen_size.1 as usize - 155,
+            content: "Tic-Tac-Toe".to_string(),
+            color: Color::BLACK,
+            background_color: TASKBAR_COLOR,
+            font_size: RasterHeight::Size20,
+            font_weight: FontWeight::Regular,
+            hide: true,
+        }),
+        desktop.add_shape(Shape::RawImage {
+            x: 15,
+            y: screen_size.1 as usize - 155,
+            width: 16,
+            height: 16,
+            data: generate_icon_for_app_str::<16, 16>("tictactoe"),
+            hide: true,
+        }),
+        0,
+        screen_size.1 as usize - 170,
+        200,
+        45,
+        "Tic-Tac-Toe",
+    ));
+
     // Time and date background
     desktop.add_shape(Shape::Rectangle {
         x: screen_size.0 as usize - 95,
@@ -559,6 +595,19 @@ pub fn run_desktop() -> ! {
                         }
                         if *label == "System Info" {
                             launch_sysinfo(&mut window_manager);
+
+                            start_menu_open = false;
+                            for (idx, label_idx, icon_idx, _, _, _, _, _) in &start_menu_entries {
+                                desktop.hide_shape(*idx);
+                                desktop.hide_shape(*label_idx);
+                                desktop.hide_shape(*icon_idx);
+                            }
+
+                            handled = true;
+                            break;
+                        }
+                        if *label == "Tic-Tac-Toe" {
+                            launch_tictactoe(&mut window_manager);
 
                             start_menu_open = false;
                             for (idx, label_idx, icon_idx, _, _, _, _, _) in &start_menu_entries {

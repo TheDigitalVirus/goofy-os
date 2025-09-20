@@ -9,7 +9,6 @@
  - [x] MAKE WINDOWS FOCUSABLE
  - [ ] Make windows minimizable
  - [x] Mark windows as dirty when focused and unfocused
- - [ ] Snake game
  - [ ] Terminal
  - [x] Icons
  - [ ] Use icons in the system (file explorer)

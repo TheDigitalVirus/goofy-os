@@ -3,4 +3,5 @@ title: Goofy OS Documentation
 author: RetrogradeDev
 description: Comprehensive documentation for Goofy OS, a hobbyist operating system project.
 color_scheme: dark
+nav_enabled: false
 url: https://retrogradedev.github.io/goofy-os

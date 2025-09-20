@@ -595,18 +595,23 @@ This comprehensive section will guide you through setting up a complete developm
 
 **Operating System Requirements:**
 - Windows 10/11, macOS 10.15+, or Linux (Ubuntu 20.04+ recommended)
-- 64-bit architecture (x86_64)
 - Minimum 8GB RAM (16GB recommended for comfortable development)
 - 20GB free disk space for tools and build artifacts
 
 **Hardware Requirements:**
-- VT-x/AMD-V virtualization support (for QEMU acceleration)
 - SSD storage recommended for faster builds
 - Multiple CPU cores recommended (4+ cores ideal)
 
 ### Installing Rust
 
 **Step 1: Install Rust Toolchain**
+
+**If you already have Rust installed, ensure it's updated to the latest stable version.**
+This is really important because we rely on a breaking change in Rust 1.91.
+
+```bash
+rustup update
+```
 
 For Windows:
 ```powershell

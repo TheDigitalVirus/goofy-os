@@ -423,13 +423,13 @@ impl FileManager {
         }
 
         // Buttons
-        let button_y = height - 60;
+        let button_y = height - 90;
 
         // New File button
         self.new_file_btn_idx = Some(surface.add_shape(Shape::Rectangle {
             x: MARGIN,
             y: button_y,
-            width: 65,
+            width: 85,
             height: BUTTON_HEIGHT,
             color: Color::new(220, 220, 220),
             filled: true,
@@ -439,7 +439,7 @@ impl FileManager {
         surface.add_shape(Shape::Rectangle {
             x: MARGIN,
             y: button_y,
-            width: 65,
+            width: 85,
             height: BUTTON_HEIGHT,
             color: Color::BLACK,
             filled: false,
@@ -449,7 +449,7 @@ impl FileManager {
         surface.add_shape(Shape::Text {
             x: MARGIN + 8,
             y: button_y + 5,
-            content: "File".to_string(),
+            content: "New File".to_string(),
             color: Color::BLACK,
             background_color: Color::new(220, 220, 220),
             font_size: RasterHeight::Size16,
@@ -459,9 +459,9 @@ impl FileManager {
 
         // New Folder button
         self.new_folder_btn_idx = Some(surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 75,
+            x: MARGIN + 95,
             y: button_y,
-            width: 65,
+            width: 95,
             height: BUTTON_HEIGHT,
             color: Color::new(180, 220, 255),
             filled: true,
@@ -469,9 +469,9 @@ impl FileManager {
         }));
 
         surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 75,
+            x: MARGIN + 95,
             y: button_y,
-            width: 65,
+            width: 95,
             height: BUTTON_HEIGHT,
             color: Color::BLACK,
             filled: false,
@@ -479,9 +479,9 @@ impl FileManager {
         });
 
         surface.add_shape(Shape::Text {
-            x: MARGIN + 82,
+            x: MARGIN + 102,
             y: button_y + 5,
-            content: "Folder".to_string(),
+            content: "New Folder".to_string(),
             color: Color::BLACK,
             background_color: Color::new(180, 220, 255),
             font_size: RasterHeight::Size16,
@@ -491,9 +491,9 @@ impl FileManager {
 
         // Delete button
         self.delete_file_btn_idx = Some(surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 150,
+            x: MARGIN + 200,
             y: button_y,
-            width: 65,
+            width: 75,
             height: BUTTON_HEIGHT,
             color: Color::new(255, 180, 180),
             filled: true,
@@ -501,9 +501,9 @@ impl FileManager {
         }));
 
         surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 150,
+            x: MARGIN + 200,
             y: button_y,
-            width: 65,
+            width: 75,
             height: BUTTON_HEIGHT,
             color: Color::BLACK,
             filled: false,
@@ -511,7 +511,7 @@ impl FileManager {
         });
 
         surface.add_shape(Shape::Text {
-            x: MARGIN + 165,
+            x: MARGIN + 215,
             y: button_y + 5,
             content: "Delete".to_string(),
             color: Color::BLACK,
@@ -523,7 +523,7 @@ impl FileManager {
 
         // Open button
         self.view_file_btn_idx = Some(surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 225,
+            x: MARGIN + 285,
             y: button_y,
             width: 65,
             height: BUTTON_HEIGHT,
@@ -533,7 +533,7 @@ impl FileManager {
         }));
 
         surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 225,
+            x: MARGIN + 285,
             y: button_y,
             width: 65,
             height: BUTTON_HEIGHT,
@@ -543,7 +543,7 @@ impl FileManager {
         });
 
         surface.add_shape(Shape::Text {
-            x: MARGIN + 245,
+            x: MARGIN + 305,
             y: button_y + 5,
             content: "Open".to_string(),
             color: Color::BLACK,
@@ -554,13 +554,13 @@ impl FileManager {
         });
 
         // Second row of buttons for clipboard operations
-        let button_y2 = height - 90;
+        let button_y2 = height - 60;
 
         // Copy button
         self.copy_btn_idx = Some(surface.add_shape(Shape::Rectangle {
             x: MARGIN,
             y: button_y2,
-            width: 50,
+            width: 60,
             height: BUTTON_HEIGHT,
             color: Color::new(200, 255, 200),
             filled: true,
@@ -570,7 +570,7 @@ impl FileManager {
         surface.add_shape(Shape::Rectangle {
             x: MARGIN,
             y: button_y2,
-            width: 50,
+            width: 60,
             height: BUTTON_HEIGHT,
             color: Color::BLACK,
             filled: false,
@@ -590,9 +590,9 @@ impl FileManager {
 
         // Cut button
         self.cut_btn_idx = Some(surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 60,
+            x: MARGIN + 70,
             y: button_y2,
-            width: 50,
+            width: 55,
             height: BUTTON_HEIGHT,
             color: Color::new(255, 220, 150),
             filled: true,
@@ -600,9 +600,9 @@ impl FileManager {
         }));
 
         surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 60,
+            x: MARGIN + 70,
             y: button_y2,
-            width: 50,
+            width: 55,
             height: BUTTON_HEIGHT,
             color: Color::BLACK,
             filled: false,
@@ -610,7 +610,7 @@ impl FileManager {
         });
 
         surface.add_shape(Shape::Text {
-            x: MARGIN + 78,
+            x: MARGIN + 88,
             y: button_y2 + 5,
             content: "Cut".to_string(),
             color: Color::BLACK,
@@ -628,9 +628,9 @@ impl FileManager {
         };
 
         self.paste_btn_idx = Some(surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 120,
+            x: MARGIN + 135,
             y: button_y2,
-            width: 50,
+            width: 70,
             height: BUTTON_HEIGHT,
             color: paste_color,
             filled: true,
@@ -638,9 +638,9 @@ impl FileManager {
         }));
 
         surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 120,
+            x: MARGIN + 135,
             y: button_y2,
-            width: 50,
+            width: 70,
             height: BUTTON_HEIGHT,
             color: Color::BLACK,
             filled: false,
@@ -648,7 +648,7 @@ impl FileManager {
         });
 
         surface.add_shape(Shape::Text {
-            x: MARGIN + 135,
+            x: MARGIN + 150,
             y: button_y2 + 5,
             content: "Paste".to_string(),
             color: Color::BLACK,
@@ -660,9 +660,9 @@ impl FileManager {
 
         // Rename button
         self.rename_btn_idx = Some(surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 180,
+            x: MARGIN + 215,
             y: button_y2,
-            width: 60,
+            width: 80,
             height: BUTTON_HEIGHT,
             color: Color::new(200, 200, 255),
             filled: true,
@@ -670,9 +670,9 @@ impl FileManager {
         }));
 
         surface.add_shape(Shape::Rectangle {
-            x: MARGIN + 180,
+            x: MARGIN + 215,
             y: button_y2,
-            width: 60,
+            width: 80,
             height: BUTTON_HEIGHT,
             color: Color::BLACK,
             filled: false,
@@ -680,7 +680,7 @@ impl FileManager {
         });
 
         surface.add_shape(Shape::Text {
-            x: MARGIN + 195,
+            x: MARGIN + 230,
             y: button_y2 + 5,
             content: "Rename".to_string(),
             color: Color::BLACK,

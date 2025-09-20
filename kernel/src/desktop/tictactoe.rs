@@ -138,8 +138,8 @@ impl TicTacToe {
         });
 
         surface.add_shape(Shape::Text {
-            x: 65,
-            y: 60,
+            x: 63,
+            y: 58,
             content: "2 Player".to_string(),
             color: Color::BLACK,
             background_color: mode_color_2p,
@@ -169,8 +169,8 @@ impl TicTacToe {
         });
 
         surface.add_shape(Shape::Text {
-            x: 155,
-            y: 60,
+            x: 160,
+            y: 58,
             content: "vs Bot".to_string(),
             color: Color::BLACK,
             background_color: mode_color_bot,
@@ -180,7 +180,7 @@ impl TicTacToe {
         });
 
         // Game board - 3x3 grid
-        let board_start_x = 80;
+        let board_start_x = 50;
         let board_start_y = 100;
         let cell_size = 60;
         let cell_padding = 5;
@@ -265,8 +265,8 @@ impl TicTacToe {
         });
 
         surface.add_shape(Shape::Text {
-            x: 110,
-            y: 360,
+            x: 100,
+            y: 358,
             content: "New Game".to_string(),
             color: Color::BLACK,
             background_color: Color::new(200, 200, 255),
@@ -490,7 +490,7 @@ impl TicTacToe {
             return false;
         }
 
-        let board_start_x = 80;
+        let board_start_x = 50;
         let board_start_y = 100;
         let cell_size = 60;
         let cell_padding = 5;

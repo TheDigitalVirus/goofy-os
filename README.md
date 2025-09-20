@@ -6,6 +6,8 @@
 [![Architecture](https://img.shields.io/badge/arch-x86__64-green.svg)]()
 [![Boot](https://img.shields.io/badge/boot-UEFI%2FBIOS-orange.svg)]()
 
+Online docs: [https://retrogradedev.github.io/goofy-os/](https://retrogradedev.github.io/goofy-os/)
+
 ## Overview
 
 Goofy OS is a lightweight, feature-rich operating system built from scratch in Rust. It aims to provide a modern computing experience while showcasing advanced OS concepts and design principles.
@@ -153,6 +155,9 @@ The built-in File Manager provides a graphical interface for file operations:
 - Double-click files to open with appropriate applications
 
 ## Getting Started
+
+### !!! Please use the docs for more detailed instructions !!!
+[https://retrogradedev.github.io/goofy-os/](https://retrogradedev.github.io/goofy-os/)
 
 ### Prerequisites
 - **Rust Toolchain** (2024 edition)

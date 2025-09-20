@@ -1,3 +1,8 @@
+---
+title: Goofy OS Documentation
+layout: default
+---
+
 # Goofy OS Technical Documentation
 
 **A Comprehensive Guide to a Rust-Based Operating System**

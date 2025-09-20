@@ -1,3 +1,4 @@
+use crate::desktop::application::Application;
 use alloc::vec;
 use alloc::{
     string::{String, ToString},
@@ -22,11 +23,71 @@ pub struct DragCache {
     is_valid: bool,
 }
 
-pub enum Application {
+pub enum AppType {
     Calculator(Calculator),
     FileManager(FileManager),
     Notepad(Notepad),
     SysInfo(SysInfo),
+}
+
+impl Application for AppType {
+    fn init(&mut self, surface: &mut Surface) {
+        match self {
+            AppType::Calculator(calculator) => calculator.init(surface),
+            AppType::FileManager(filemanager) => filemanager.setup_ui(surface),
+            AppType::Notepad(notepad) => notepad.init(surface),
+            AppType::SysInfo(sysinfo) => sysinfo.init(surface),
+        }
+    }
+
+    fn render(&mut self, surface: &mut Surface) {
+        match self {
+            AppType::Calculator(calculator) => calculator.render(surface),
+            AppType::FileManager(filemanager) => filemanager.render(surface),
+            AppType::Notepad(notepad) => notepad.render(surface),
+            AppType::SysInfo(sysinfo) => sysinfo.render(surface),
+        }
+    }
+
+    fn handle_char_input(&mut self, c: char, ctrl_pressed: bool, surface: &mut Surface) {
+        match self {
+            AppType::Calculator(calculator) => {
+                calculator.handle_char_input(c, ctrl_pressed, surface)
+            }
+            AppType::FileManager(filemanager) => {
+                filemanager.handle_char_input(c, ctrl_pressed, surface)
+            }
+            AppType::Notepad(notepad) => notepad.handle_char_input(c, ctrl_pressed, surface),
+            AppType::SysInfo(sysinfo) => sysinfo.handle_char_input(c, ctrl_pressed, surface),
+        }
+    }
+
+    fn handle_key_input(&mut self, key: KeyCode, surface: &mut Surface) {
+        match self {
+            AppType::Calculator(calculator) => calculator.handle_key_input(key, surface),
+            AppType::FileManager(filemanager) => filemanager.handle_key_input(key, surface),
+            AppType::Notepad(notepad) => notepad.handle_key_input(key, surface),
+            AppType::SysInfo(sysinfo) => sysinfo.handle_key_input(key, surface),
+        }
+    }
+
+    fn handle_mouse_click(&mut self, x: usize, y: usize, surface: &mut Surface) {
+        match self {
+            AppType::Calculator(calculator) => calculator.handle_mouse_click(x, y, surface),
+            AppType::FileManager(filemanager) => filemanager.handle_mouse_click(x, y, surface),
+            AppType::Notepad(notepad) => notepad.handle_mouse_click(x, y, surface),
+            AppType::SysInfo(sysinfo) => sysinfo.handle_mouse_click(x, y, surface),
+        }
+    }
+
+    fn get_title(&self) -> Option<String> {
+        match self {
+            AppType::Calculator(calculator) => calculator.get_title(),
+            AppType::FileManager(filemanager) => filemanager.get_title(),
+            AppType::Notepad(notepad) => notepad.get_title(),
+            AppType::SysInfo(sysinfo) => sysinfo.get_title(),
+        }
+    }
 }
 
 pub struct Window {
@@ -43,7 +104,7 @@ pub struct Window {
     pub drag_preview_x: usize,
     pub drag_preview_y: usize,
     drag_cache: Option<DragCache>,
-    pub application: Option<Application>,
+    pub application: AppType,
 }
 
 impl Window {
@@ -54,21 +115,21 @@ impl Window {
         height: usize,
         id: usize,
         title: String,
-        application: Option<Application>,
+        application: AppType,
     ) -> Self {
-        let background_color = application.as_ref().map_or(Color::BLACK, |app| match app {
-            Application::Calculator(_) => Color::GRAY,
-            Application::FileManager(_) => Color::new(240, 240, 240),
-            Application::Notepad(_) => Color::WHITE,
-            Application::SysInfo(_) => Color::DARKGRAY,
-        });
+        let background_color = match &application {
+            AppType::Calculator(_) => Color::GRAY,
+            AppType::FileManager(_) => Color::new(240, 240, 240),
+            AppType::Notepad(_) => Color::WHITE,
+            AppType::SysInfo(_) => Color::DARKGRAY,
+        };
+
         let surface = Surface::new(width, height, background_color);
         let icon = generate_icon_for_app_str::<16, 16>(match &application {
-            Some(Application::Calculator(_)) => "calculator",
-            Some(Application::FileManager(_)) => "filemanager",
-            Some(Application::Notepad(_)) => "notepad",
-            Some(Application::SysInfo(_)) => "sysinfo",
-            None => "unknown",
+            AppType::Calculator(_) => "calculator",
+            AppType::FileManager(_) => "filemanager",
+            AppType::Notepad(_) => "notepad",
+            AppType::SysInfo(_) => "sysinfo",
         });
 
         Self {
@@ -113,23 +174,11 @@ impl Window {
     }
 
     pub fn render(&mut self, framebuffer: &mut FrameBufferWriter, force: bool) -> bool {
-        match &mut self.application {
-            Some(Application::Calculator(calculator)) => {
-                calculator.render(&mut self.surface);
-            }
-            Some(Application::FileManager(filemanager)) => {
-                filemanager.render(&mut self.surface);
-            }
-            Some(Application::Notepad(notepad)) => {
-                self.title = notepad.get_title();
-
-                notepad.render(&mut self.surface);
-            }
-            Some(Application::SysInfo(sysinfo)) => {
-                sysinfo.render(&mut self.surface);
-            }
-            None => {}
+        if let Some(title) = self.application.get_title() {
+            self.title = title;
         }
+
+        self.application.render(&mut self.surface);
 
         return self.surface.render(framebuffer, self.x, self.y, force);
     }
@@ -353,21 +402,7 @@ impl WindowManager {
         window.id = self.next_window_id;
         self.next_window_id += 1;
 
-        match &mut window.application {
-            Some(Application::Calculator(calculator)) => {
-                calculator.init(&mut window.surface);
-            }
-            Some(Application::FileManager(filemanager)) => {
-                filemanager.setup_ui(&mut window.surface);
-            }
-            Some(Application::Notepad(notepad)) => {
-                notepad.init(&mut window.surface);
-            }
-            Some(Application::SysInfo(sysinfo)) => {
-                sysinfo.init(&mut window.surface);
-            }
-            None => {}
-        }
+        window.application.init(&mut window.surface);
 
         // Add window to front of z-order (becomes focused)
         self.window_order.push(window.id);
@@ -466,7 +501,6 @@ impl WindowManager {
         let mut window_to_focus: Option<usize> = None;
         let mut window_to_remove: Option<usize> = None;
         let mut remove_bounds: Option<(usize, usize, usize, usize)> = None;
-        let mut app_result: Option<(String, String)> = None;
 
         // Check if the click was on the close button first
         for window in &self.windows {
@@ -514,47 +548,19 @@ impl WindowManager {
             {
                 window_to_focus = Some(window.id);
 
-                if let Some(Application::Calculator(calculator)) = &mut window.application {
-                    let x = (x as usize).saturating_sub(window.x);
-                    let y = (y as usize).saturating_sub(window.y);
+                let local_x = (x as usize).saturating_sub(window.x);
+                let local_y = (y as usize).saturating_sub(window.y);
 
-                    calculator.handle_mouse_click(x, y);
-                    break;
-                }
-                if let Some(Application::Notepad(notepad)) = &mut window.application {
-                    let x = (x as usize).saturating_sub(window.x);
-                    let y = (y as usize).saturating_sub(window.y);
+                window
+                    .application
+                    .handle_mouse_click(local_x, local_y, &mut window.surface);
 
-                    notepad.handle_mouse_click(x, y);
-                    break;
-                }
-                if let Some(Application::FileManager(filemanager)) = &mut window.application {
-                    let x = (x as usize).saturating_sub(window.x);
-                    let y = (y as usize).saturating_sub(window.y);
-
-                    let (_, open_app) = filemanager.handle_click(x, y, &mut window.surface);
-                    if let Some((file_path, app)) = open_app {
-                        app_result = Some((file_path, app));
-                    }
-                    break;
-                }
-                if let Some(Application::SysInfo(sysinfo)) = &mut window.application {
-                    let x = (x as usize).saturating_sub(window.x);
-                    let y = (y as usize).saturating_sub(window.y);
-
-                    sysinfo.handle_mouse_click(x, y);
-                    break;
-                }
                 break; // Always break after handling content click
             }
         }
 
         if let Some(window_id) = window_to_focus {
             self.focus_window(window_id);
-        }
-
-        if let Some((file_path, app)) = app_result {
-            self.open_app_handler(file_path, app);
         }
 
         (window_to_focus.is_some(), None)
@@ -569,7 +575,7 @@ impl WindowManager {
         }
     }
 
-    fn open_app_handler(&mut self, file_path: String, app: String) {
+    pub fn open_app_handler(&mut self, file_path: String, app: String) {
         match app.as_str() {
             "notepad" => launch_notepad_with_file(self, file_path),
             "calculator" => launch_calculator(self), // Who tf opens his files in calculator?!
@@ -660,15 +666,9 @@ impl WindowManager {
         // Send character input only to the focused window
         if let Some(focused_id) = self.get_focused_window_id() {
             if let Some(window) = self.windows.iter_mut().find(|w| w.id == focused_id) {
-                match &mut window.application {
-                    Some(Application::Notepad(notepad)) => {
-                        notepad.handle_char_input(ch, ctrl_pressed);
-                    }
-                    Some(Application::FileManager(filemanager)) => {
-                        filemanager.handle_char_input(ch, &mut window.surface);
-                    }
-                    _ => {}
-                }
+                window
+                    .application
+                    .handle_char_input(ch, ctrl_pressed, &mut window.surface);
             }
         }
     }
@@ -677,15 +677,9 @@ impl WindowManager {
         // Handle key input only for the focused window
         if let Some(focused_id) = self.get_focused_window_id() {
             if let Some(window) = self.windows.iter_mut().find(|w| w.id == focused_id) {
-                match &mut window.application {
-                    Some(Application::Notepad(notepad)) => {
-                        notepad.handle_key_input(key);
-                    }
-                    Some(Application::FileManager(filemanager)) => {
-                        filemanager.handle_key_input(key, &mut window.surface);
-                    }
-                    _ => {}
-                }
+                window
+                    .application
+                    .handle_key_input(key, &mut window.surface);
             }
         }
     }
@@ -712,7 +706,7 @@ pub fn launch_calculator(window_manager: &mut WindowManager) {
         315,
         0, // Will be overridden by add_window
         "Calculator".to_string(),
-        Some(Application::Calculator(Calculator::new())),
+        AppType::Calculator(Calculator::new(None)),
     ));
 }
 
@@ -724,7 +718,7 @@ pub fn launch_filemanager(window_manager: &mut WindowManager) {
         400,
         0, // Will be overridden by add_window
         "File Manager".to_string(),
-        Some(Application::FileManager(FileManager::new())),
+        AppType::FileManager(FileManager::new(None)),
     ));
 }
 
@@ -736,7 +730,7 @@ pub fn launch_notepad(window_manager: &mut WindowManager) {
         400,
         0, // Will be overridden by add_window
         "Notepad".to_string(),
-        Some(Application::Notepad(Notepad::new(None))),
+        AppType::Notepad(Notepad::new(None)),
     ));
 }
 
@@ -748,7 +742,7 @@ pub fn launch_notepad_with_file(window_manager: &mut WindowManager, file_path: S
         400,
         0, // Will be overridden by add_window
         "Notepad".to_string(),
-        Some(Application::Notepad(Notepad::new(Some(file_path)))),
+        AppType::Notepad(Notepad::new(Some(file_path))),
     ));
 }
 
@@ -760,7 +754,7 @@ pub fn launch_sysinfo(window_manager: &mut WindowManager) {
         450,
         0, // Will be overridden by add_window
         "System Information".to_string(),
-        Some(Application::SysInfo(SysInfo::new())),
+        AppType::SysInfo(SysInfo::new(None)),
     ));
 }
 pub fn generate_icon_for_app_str<const W: usize, const H: usize>(app: &str) -> Vec<Color> {

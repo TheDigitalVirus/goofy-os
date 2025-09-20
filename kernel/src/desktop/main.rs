@@ -1,6 +1,9 @@
 use crate::{
     desktop::{
-        input::{CLICK_QUEUE, CurrentMouseState, SCANCODE_QUEUE, STATE_QUEUE, init_queues},
+        input::{
+            CLICK_QUEUE, CurrentMouseState, FILE_OPEN_QUEUE, SCANCODE_QUEUE, STATE_QUEUE,
+            init_queues,
+        },
         window_manager::{
             WindowManager, generate_icon_for_app_str, launch_calculator, launch_filemanager,
             launch_notepad, launch_sysinfo,
@@ -35,6 +38,9 @@ pub fn run_desktop() -> ! {
     let mouse_state_queue = STATE_QUEUE
         .try_get()
         .expect("Mouse state queue not initialized");
+    let file_open_queue = FILE_OPEN_QUEUE
+        .try_get()
+        .expect("File open queue not initialized");
 
     let screen_size = *SCREEN_SIZE.get().unwrap();
     let mut desktop = Surface::new(
@@ -593,6 +599,11 @@ pub fn run_desktop() -> ! {
                     }
                 }
             }
+        }
+
+        // Handle file open requests
+        while let Some((file_path, app_name)) = file_open_queue.pop() {
+            window_manager.open_app_handler(file_path, app_name);
         }
 
         if mouse_state.left_button_down && !mouse_state.prev_left_button_down {

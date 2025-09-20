@@ -1,6 +1,7 @@
 use crate::framebuffer::SCREEN_SIZE;
 use crate::print;
 
+use alloc::string::String;
 use conquer_once::spin::OnceCell;
 use crossbeam_queue::ArrayQueue;
 use ps2_mouse::MouseState;
@@ -8,6 +9,7 @@ use ps2_mouse::MouseState;
 pub static SCANCODE_QUEUE: OnceCell<ArrayQueue<u8>> = OnceCell::uninit();
 pub static STATE_QUEUE: OnceCell<ArrayQueue<MouseState>> = OnceCell::uninit();
 pub static CLICK_QUEUE: OnceCell<ArrayQueue<(i16, i16)>> = OnceCell::uninit();
+pub static FILE_OPEN_QUEUE: OnceCell<ArrayQueue<(String, String)>> = OnceCell::uninit();
 
 pub fn add_scancode(scancode: u8) {
     if let Some(queue) = SCANCODE_QUEUE.get() {
@@ -35,6 +37,22 @@ pub fn add_mouse_state(state: MouseState) {
     }
 }
 
+pub fn add_file_open_request(file_path: String, app_name: String) {
+    if let Some(queue) = FILE_OPEN_QUEUE.get() {
+        if queue.push((file_path.clone(), app_name.clone())).is_err() {
+            print!(
+                "File open queue is full, dropping request: {} with {}",
+                file_path, app_name
+            );
+        }
+    } else {
+        print!(
+            "File open queue not initialized, cannot add request: {} with {}",
+            file_path, app_name
+        );
+    }
+}
+
 pub fn init_queues() {
     SCANCODE_QUEUE
         .try_init_once(|| ArrayQueue::new(100))
@@ -45,6 +63,9 @@ pub fn init_queues() {
     CLICK_QUEUE
         .try_init_once(|| ArrayQueue::new(20))
         .expect("Click queue should only be initialized once");
+    FILE_OPEN_QUEUE
+        .try_init_once(|| ArrayQueue::new(20))
+        .expect("File open queue should only be initialized once");
 }
 
 pub struct CurrentMouseState {

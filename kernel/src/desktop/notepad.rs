@@ -7,6 +7,7 @@ use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
 use pc_keyboard::KeyCode;
 
 use crate::{
+    desktop::application::Application,
     framebuffer::Color,
     fs::{
         fat32::FileEntry,
@@ -57,8 +58,8 @@ pub struct Notepad {
 }
 
 impl Notepad {
-    pub fn new(file_path: Option<String>) -> Self {
-        let text_content = if let Some(ref path) = file_path {
+    pub fn new(args: Option<String>) -> Self {
+        let text_content = if let Some(ref path) = args {
             match read_text_file(path) {
                 Ok(content) => content,
                 Err(error) => {
@@ -83,7 +84,7 @@ impl Notepad {
             previous_content: String::new(),
             prev_cursor_x: 0,
             prev_cursor_y: 0,
-            open_file_path: file_path,
+            open_file_path: args,
             has_changes: false,
             mode: NotepadMode::Normal,
 
@@ -104,33 +105,6 @@ impl Notepad {
             save_as_path_text_idx: None,
             save_as_folder_shapes_changed: false,
         }
-    }
-
-    pub fn init(&mut self, surface: &mut Surface) {
-        // Text content display
-        self.text_area_idx = surface.add_shape(Shape::Text {
-            x: 5,
-            y: 5,
-            content: self.get_display_text(),
-            color: Color::BLACK,
-            background_color: Color::WHITE,
-            font_size: RasterHeight::Size16,
-            font_weight: FontWeight::Regular,
-            hide: false,
-        });
-
-        // Cursor (simple vertical line)
-        self.cursor_idx = surface.add_shape(Shape::Rectangle {
-            x: 5,
-            y: 5,
-            width: 1,
-            height: 16,
-            color: Color::BLACK,
-            filled: true,
-            hide: false,
-        });
-
-        self.update_display_lines();
     }
 
     fn handle_save(&mut self) {
@@ -266,124 +240,6 @@ impl Notepad {
         }
     }
 
-    pub fn handle_char_input(&mut self, ch: char, ctrl_pressed: bool) {
-        if self.mode == NotepadMode::SaveAs {
-            // In Save-As mode, only handle filename input
-            match ch {
-                '\u{08}' => {
-                    // Backspace
-                    if !self.save_as_filename.is_empty() {
-                        self.save_as_filename.pop();
-                    }
-                }
-                '\r' | '\n' => {
-                    if let Some(selected_folder) = self.save_as_selected_folder {
-                        let folder_name = &self.save_as_folders[selected_folder].name;
-                        self.handle_save_as_navigation(&folder_name.clone());
-                    }
-                }
-                ch if ch.is_control() => {
-                    // Ignore control characters
-                }
-                _ => {
-                    // Add character to filename
-                    if self.save_as_filename.len() < 50 {
-                        // Limit filename length
-                        self.save_as_filename.push(ch);
-                    }
-                }
-            }
-            return;
-        }
-
-        if ctrl_pressed {
-            match ch {
-                's' | 'S' => {
-                    self.handle_save();
-                }
-                'o' | 'O' => {
-                    unimplemented!("Ctrl+O - Open file dialog not implemented.");
-                }
-                _ => {}
-            }
-            return;
-        }
-
-        match ch {
-            '\u{08}' => {
-                // Backspace
-                if self.cursor_position > 0 {
-                    self.text_content.remove(self.cursor_position - 1);
-                    self.cursor_position -= 1;
-                }
-            }
-            '\r' | '\n' => {
-                // Enter - add newline
-                self.text_content.insert(self.cursor_position, '\n');
-                self.cursor_position += 1;
-            }
-            ch if ch.is_control() => {
-                // Ignore other control characters
-            }
-            _ => {
-                // Regular character
-                self.text_content.insert(self.cursor_position, ch);
-                self.cursor_position += 1;
-            }
-        }
-
-        self.has_changes = true;
-
-        self.update_display_lines();
-        self.update_scroll_if_needed();
-    }
-
-    pub fn handle_key_input(&mut self, key: KeyCode) {
-        if self.mode == NotepadMode::SaveAs {
-            // In Save-As mode, handle folder navigation
-            match key {
-                KeyCode::ArrowUp => {
-                    if let Some(selected) = self.save_as_selected_folder {
-                        if selected > 0 {
-                            self.save_as_selected_folder = Some(selected - 1);
-                        }
-                    } else if !self.save_as_folders.is_empty() {
-                        self.save_as_selected_folder = Some(self.save_as_folders.len() - 1);
-                    }
-                }
-                KeyCode::ArrowDown => {
-                    if let Some(selected) = self.save_as_selected_folder {
-                        if selected < self.save_as_folders.len() - 1 {
-                            self.save_as_selected_folder = Some(selected + 1);
-                        }
-                    } else if !self.save_as_folders.is_empty() {
-                        self.save_as_selected_folder = Some(0);
-                    }
-                }
-                KeyCode::Escape => {
-                    // Cancel Save-As dialog
-                    self.mode = NotepadMode::Normal;
-                }
-                _ => {}
-            }
-            return;
-        }
-
-        match key {
-            KeyCode::ArrowLeft => {
-                if self.cursor_position > 0 {
-                    self.cursor_position -= 1;
-                }
-            }
-            KeyCode::ArrowRight => {
-                if self.cursor_position < self.text_content.len() {
-                    self.cursor_position += 1;
-                }
-            }
-            _ => {}
-        }
-    }
-
     fn update_display_lines(&mut self) {
         self.display_lines.clear();
 
@@ -471,34 +327,6 @@ impl Notepad {
         let y = 5 + line_in_visible * 18; // 18 pixels per line (16 + spacing)
 
         (x, y)
-    }
-
-    pub fn render(&mut self, surface: &mut Surface) {
-        if self.mode == NotepadMode::SaveAs {
-            self.render_save_as_dialog(surface);
-            return;
-        }
-
-        if surface.shapes.len() > 2 {
-            self.restore_normal_view(surface);
-        }
-
-        let current_display = self.get_display_text();
-
-        // Only update if content changed
-        if current_display != self.previous_content {
-            surface.update_text_content(self.text_area_idx, current_display.clone(), None);
-            self.previous_content = current_display;
-        }
-
-        // Update cursor position
-        let (cursor_x, cursor_y) = self.get_cursor_visual_position();
-        if cursor_x != self.prev_cursor_x || cursor_y != self.prev_cursor_y {
-            surface.move_shape(self.cursor_idx, cursor_x, cursor_y);
-
-            self.prev_cursor_x = cursor_x;
-            self.prev_cursor_y = cursor_y;
-        }
     }
 
     fn render_save_as_dialog(&mut self, surface: &mut Surface) {
@@ -782,9 +610,188 @@ impl Notepad {
         }
     }
 
-    pub fn handle_mouse_click(&mut self, x: usize, y: usize) -> bool {
+    pub fn trigger_save_as(&mut self) {
+        self.enter_save_as_mode();
+    }
+}
+
+impl Application for Notepad {
+    fn init(&mut self, surface: &mut Surface) {
+        // Text content display
+        self.text_area_idx = surface.add_shape(Shape::Text {
+            x: 5,
+            y: 5,
+            content: self.get_display_text(),
+            color: Color::BLACK,
+            background_color: Color::WHITE,
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        });
+
+        // Cursor (simple vertical line)
+        self.cursor_idx = surface.add_shape(Shape::Rectangle {
+            x: 5,
+            y: 5,
+            width: 1,
+            height: 16,
+            color: Color::BLACK,
+            filled: true,
+            hide: false,
+        });
+
+        self.update_display_lines();
+    }
+
+    fn handle_char_input(&mut self, ch: char, ctrl_pressed: bool, _surface: &mut Surface) {
+        if self.mode == NotepadMode::SaveAs {
+            // In Save-As mode, only handle filename input
+            match ch {
+                '\u{08}' => {
+                    // Backspace
+                    if !self.save_as_filename.is_empty() {
+                        self.save_as_filename.pop();
+                    }
+                }
+                '\r' | '\n' => {
+                    if let Some(selected_folder) = self.save_as_selected_folder {
+                        let folder_name = &self.save_as_folders[selected_folder].name;
+                        self.handle_save_as_navigation(&folder_name.clone());
+                    }
+                }
+                ch if ch.is_control() => {
+                    // Ignore control characters
+                }
+                _ => {
+                    // Add character to filename
+                    if self.save_as_filename.len() < 50 {
+                        // Limit filename length
+                        self.save_as_filename.push(ch);
+                    }
+                }
+            }
+            return;
+        }
+
+        if ctrl_pressed {
+            match ch {
+                's' | 'S' => {
+                    self.handle_save();
+                }
+                'o' | 'O' => {
+                    unimplemented!("Ctrl+O - Open file dialog not implemented.");
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match ch {
+            '\u{08}' => {
+                // Backspace
+                if self.cursor_position > 0 {
+                    self.text_content.remove(self.cursor_position - 1);
+                    self.cursor_position -= 1;
+                }
+            }
+            '\r' | '\n' => {
+                // Enter - add newline
+                self.text_content.insert(self.cursor_position, '\n');
+                self.cursor_position += 1;
+            }
+            ch if ch.is_control() => {
+                // Ignore other control characters
+            }
+            _ => {
+                // Regular character
+                self.text_content.insert(self.cursor_position, ch);
+                self.cursor_position += 1;
+            }
+        }
+
+        self.has_changes = true;
+
+        self.update_display_lines();
+        self.update_scroll_if_needed();
+    }
+
+    fn handle_key_input(&mut self, key: KeyCode, _surface: &mut Surface) {
+        if self.mode == NotepadMode::SaveAs {
+            // In Save-As mode, handle folder navigation
+            match key {
+                KeyCode::ArrowUp => {
+                    if let Some(selected) = self.save_as_selected_folder {
+                        if selected > 0 {
+                            self.save_as_selected_folder = Some(selected - 1);
+                        }
+                    } else if !self.save_as_folders.is_empty() {
+                        self.save_as_selected_folder = Some(self.save_as_folders.len() - 1);
+                    }
+                }
+                KeyCode::ArrowDown => {
+                    if let Some(selected) = self.save_as_selected_folder {
+                        if selected < self.save_as_folders.len() - 1 {
+                            self.save_as_selected_folder = Some(selected + 1);
+                        }
+                    } else if !self.save_as_folders.is_empty() {
+                        self.save_as_selected_folder = Some(0);
+                    }
+                }
+                KeyCode::Escape => {
+                    // Cancel Save-As dialog
+                    self.mode = NotepadMode::Normal;
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match key {
+            KeyCode::ArrowLeft => {
+                if self.cursor_position > 0 {
+                    self.cursor_position -= 1;
+                }
+            }
+            KeyCode::ArrowRight => {
+                if self.cursor_position < self.text_content.len() {
+                    self.cursor_position += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn render(&mut self, surface: &mut Surface) {
+        if self.mode == NotepadMode::SaveAs {
+            self.render_save_as_dialog(surface);
+            return;
+        }
+
+        if surface.shapes.len() > 2 {
+            self.restore_normal_view(surface);
+        }
+
+        let current_display = self.get_display_text();
+
+        // Only update if content changed
+        if current_display != self.previous_content {
+            surface.update_text_content(self.text_area_idx, current_display.clone(), None);
+            self.previous_content = current_display;
+        }
+
+        // Update cursor position
+        let (cursor_x, cursor_y) = self.get_cursor_visual_position();
+        if cursor_x != self.prev_cursor_x || cursor_y != self.prev_cursor_y {
+            surface.move_shape(self.cursor_idx, cursor_x, cursor_y);
+
+            self.prev_cursor_x = cursor_x;
+            self.prev_cursor_y = cursor_y;
+        }
+    }
+
+    fn handle_mouse_click(&mut self, x: usize, y: usize, _surface: &mut Surface) {
         if self.mode != NotepadMode::SaveAs {
-            return false;
+            return;
         }
 
         let width = 600; // Assume standard window width
@@ -814,7 +821,7 @@ impl Notepad {
                     serial_println!("Selected folder: {}", self.save_as_folders[i].name);
                     self.save_as_selected_folder = Some(i);
                 }
-                return true;
+                return;
             }
         }
 
@@ -822,23 +829,15 @@ impl Notepad {
         let button_y = height - 60;
         if x >= 30 && x < 100 && y >= button_y && y < button_y + 25 {
             self.perform_save_as();
-            return true;
         }
 
         // Handle Cancel button click
         if x >= 110 && x < 180 && y >= button_y && y < button_y + 25 {
             self.mode = NotepadMode::Normal;
-            return true;
         }
-
-        false
     }
 
-    pub fn trigger_save_as(&mut self) {
-        self.enter_save_as_mode();
-    }
-
-    pub fn get_title(&mut self) -> String {
+    fn get_title(&self) -> Option<String> {
         let base_title = if let Some(ref path) = self.open_file_path {
             path.split('/').last().unwrap_or("Untitled").to_string()
         } else {
@@ -851,6 +850,6 @@ impl Notepad {
             base_title
         };
 
-        format!("{} - Notepad", title)
+        Some(format!("{} - Notepad", title))
     }
 }

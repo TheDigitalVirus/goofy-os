@@ -1,3 +1,4 @@
+pub mod application;
 pub mod calculator;
 pub mod filemanager;
 pub mod input;

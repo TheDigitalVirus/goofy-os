@@ -6,6 +6,7 @@ use alloc::{
 use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
 
 use crate::{
+    desktop::application::Application,
     framebuffer::Color,
     surface::{Shape, Surface},
 };
@@ -33,7 +34,7 @@ pub struct Calculator {
 }
 
 impl Calculator {
-    pub fn new() -> Self {
+    pub fn new(_args: Option<String>) -> Self {
         Self {
             state: CalculatorState::InputFirst,
             previous_display_text: String::new(),
@@ -41,80 +42,6 @@ impl Calculator {
             current_input: String::new(),
             display_idx: 0,
             button_regions: Vec::new(),
-        }
-    }
-
-    pub fn init(&mut self, surface: &mut Surface) {
-        let button_height: usize = 50;
-        let button_width: usize = 40;
-        let button_spacing: usize = 5;
-        let start_x = 15;
-        let start_y = 85;
-
-        surface.add_shape(Shape::Rectangle {
-            x: 15,
-            y: 15,
-            width: 175,
-            height: 60,
-            color: Color::WHITE,
-            filled: true,
-            hide: false,
-        });
-
-        self.display_idx = surface.add_shape(Shape::Text {
-            x: 20,
-            y: 30,
-            content: self.display_text.clone(),
-            color: Color::BLACK,
-            background_color: Color::WHITE,
-            font_size: RasterHeight::Size32,
-            font_weight: FontWeight::Light,
-            hide: false,
-        });
-
-        let buttons = [
-            ["7", "8", "9", ":"],
-            ["4", "5", "6", "x"],
-            ["1", "2", "3", "-"],
-            ["0", ".", "=", "+"],
-        ];
-
-        for (row, button_row) in buttons.iter().enumerate() {
-            for (col, &button) in button_row.iter().enumerate() {
-                let x = start_x + col * (button_width + button_spacing);
-                let y = start_y + row * (button_height + button_spacing);
-                self.button_regions
-                    .push((x, y, button_width, button_height));
-
-                surface.add_shape(Shape::Rectangle {
-                    x,
-                    y,
-                    width: button_width,
-                    height: button_height,
-                    color: Color::WHITE,
-                    filled: true,
-                    hide: false,
-                });
-                surface.add_shape(Shape::Text {
-                    x: x + 13,
-                    y: y + 15,
-                    content: button.to_string(),
-                    color: Color::BLACK,
-                    background_color: Color::WHITE,
-                    font_size: RasterHeight::Size24,
-                    font_weight: FontWeight::Light,
-                    hide: false,
-                });
-            }
-        }
-    }
-
-    pub fn handle_mouse_click(&mut self, x: usize, y: usize) {
-        for (idx, &(button_x, button_y, width, height)) in self.button_regions.iter().enumerate() {
-            if x >= button_x && x < button_x + width && y >= button_y && y < button_y + height {
-                self.handle_button_click(idx);
-                return;
-            }
         }
     }
 
@@ -200,8 +127,84 @@ impl Calculator {
             _ => {}
         }
     }
+}
 
-    pub fn render(&mut self, surface: &mut Surface) {
+impl Application for Calculator {
+    fn init(&mut self, surface: &mut Surface) {
+        let button_height: usize = 50;
+        let button_width: usize = 40;
+        let button_spacing: usize = 5;
+        let start_x = 15;
+        let start_y = 85;
+
+        surface.add_shape(Shape::Rectangle {
+            x: 15,
+            y: 15,
+            width: 175,
+            height: 60,
+            color: Color::WHITE,
+            filled: true,
+            hide: false,
+        });
+
+        self.display_idx = surface.add_shape(Shape::Text {
+            x: 20,
+            y: 30,
+            content: self.display_text.clone(),
+            color: Color::BLACK,
+            background_color: Color::WHITE,
+            font_size: RasterHeight::Size32,
+            font_weight: FontWeight::Light,
+            hide: false,
+        });
+
+        let buttons = [
+            ["7", "8", "9", ":"],
+            ["4", "5", "6", "x"],
+            ["1", "2", "3", "-"],
+            ["0", ".", "=", "+"],
+        ];
+
+        for (row, button_row) in buttons.iter().enumerate() {
+            for (col, &button) in button_row.iter().enumerate() {
+                let x = start_x + col * (button_width + button_spacing);
+                let y = start_y + row * (button_height + button_spacing);
+                self.button_regions
+                    .push((x, y, button_width, button_height));
+
+                surface.add_shape(Shape::Rectangle {
+                    x,
+                    y,
+                    width: button_width,
+                    height: button_height,
+                    color: Color::WHITE,
+                    filled: true,
+                    hide: false,
+                });
+                surface.add_shape(Shape::Text {
+                    x: x + 13,
+                    y: y + 15,
+                    content: button.to_string(),
+                    color: Color::BLACK,
+                    background_color: Color::WHITE,
+                    font_size: RasterHeight::Size24,
+                    font_weight: FontWeight::Light,
+                    hide: false,
+                });
+            }
+        }
+    }
+
+    fn handle_mouse_click(&mut self, x: usize, y: usize, _surface: &mut Surface) {
+        for (idx, &(button_x, button_y, width, height)) in self.button_regions.iter().enumerate() {
+            if x >= button_x && x < button_x + width && y >= button_y && y < button_y + height {
+                self.handle_button_click(idx);
+                return;
+            }
+        }
+    }
+
+    fn render(&mut self, surface: &mut Surface) {
         if self.display_text == self.previous_display_text {
             return; // No change in display text, nothing to update
         }
@@ -209,5 +212,11 @@ impl Calculator {
         surface.update_text_content(self.display_idx, self.display_text.clone(), None);
 
         self.previous_display_text = self.display_text.clone();
+    }
+
+    fn handle_char_input(&mut self, _c: char, _ctrl_pressed: bool, _surface: &mut Surface) {}
+    fn handle_key_input(&mut self, _key: pc_keyboard::KeyCode, _surface: &mut Surface) {}
+    fn get_title(&self) -> Option<String> {
+        None
     }
 }

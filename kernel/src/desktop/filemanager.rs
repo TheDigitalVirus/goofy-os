@@ -6,6 +6,7 @@ use alloc::{
 use pc_keyboard::KeyCode;
 
 use crate::{
+    desktop::{application::Application, input::add_file_open_request},
     framebuffer::Color,
     fs::{
         fat32::FileEntry,
@@ -102,7 +103,7 @@ pub struct FileManager {
 }
 
 impl FileManager {
-    pub fn new() -> Self {
+    pub fn new(_args: Option<String>) -> Self {
         let mut fm = Self {
             mode: FileManagerMode::Browse,
             files: Vec::new(),
@@ -1616,23 +1617,6 @@ impl FileManager {
         }
     }
 
-    pub fn handle_click(
-        &mut self,
-        x: usize,
-        y: usize,
-        surface: &mut Surface,
-    ) -> (bool, Option<(String, String)>) {
-        match &self.mode {
-            FileManagerMode::Browse => (self.handle_browse_click(x, y, surface), None),
-            FileManagerMode::NewFile => (self.handle_new_file_click(x, y, surface), None),
-            FileManagerMode::NewFolder => (self.handle_new_folder_click(x, y, surface), None),
-            FileManagerMode::DeleteFile => (self.handle_delete_click(x, y, surface), None),
-            FileManagerMode::DeleteFolder => (self.handle_delete_folder_click(x, y, surface), None),
-            FileManagerMode::ViewFile(_) => self.handle_view_click(x, y, surface),
-            FileManagerMode::Rename(_) => (self.handle_rename_click(x, y, surface), None),
-        }
-    }
-
     fn handle_browse_click(&mut self, x: usize, y: usize, surface: &mut Surface) -> bool {
         // Check file list clicks
         if x >= MARGIN && x < surface.width - MARGIN && y >= 45 && y < 45 + FILE_LIST_HEIGHT {
@@ -1908,18 +1892,13 @@ impl FileManager {
         false
     }
 
-    fn handle_view_click(
-        &mut self,
-        x: usize,
-        y: usize,
-        surface: &mut Surface,
-    ) -> (bool, Option<(String, String)>) {
+    fn handle_view_click(&mut self, x: usize, y: usize, surface: &mut Surface) -> bool {
         if self.back_btn_idx.is_some() {
             if self.is_button_clicked(x, y, MARGIN, surface.height - 60, 80, BUTTON_HEIGHT) {
                 self.mode = FileManagerMode::Browse;
                 self.setup_ui(surface);
 
-                return (true, None);
+                return true;
             }
         }
 
@@ -1938,11 +1917,14 @@ impl FileManager {
                         format!("{}/{}", self.current_path, file.name)
                     };
 
+                    // Add the file opening request to the queue
+                    add_file_open_request(file_path, app);
+
                     self.selected_open_file_app = None;
                     self.mode = FileManagerMode::Browse;
                     self.setup_ui(surface);
 
-                    return (true, Some((file_path, app)));
+                    return true;
                 } else {
                     // Use optimized status update instead of full UI rebuild
                     self.update_status_message(
@@ -1950,7 +1932,7 @@ impl FileManager {
                         "Please select an application to open the file".to_string(),
                     );
                 }
-                return (true, None);
+                return true;
             }
         }
 
@@ -1959,12 +1941,12 @@ impl FileManager {
                 if self.is_button_clicked(x, y, MARGIN, *app_y, 200, 20) {
                     self.selected_open_file_app = Some(app.to_string());
                     self.setup_ui(surface);
-                    return (true, None);
+                    return true;
                 }
             }
         }
 
-        (false, None)
+        false
     }
 
     fn is_button_clicked(
@@ -2040,129 +2022,6 @@ impl FileManager {
                     }
                 }
             }
-        }
-    }
-
-    pub fn handle_char_input(&mut self, c: char, surface: &mut Surface) {
-        match &self.mode {
-            FileManagerMode::Browse => {
-                if c == '\n' {
-                    self.handle_view_file(surface);
-                }
-            }
-            FileManagerMode::NewFile => {
-                if c == '\x08' {
-                    // Backspace
-                    self.input_text.pop();
-                } else if c == '\n' {
-                    // Enter key, create file
-                    self.create_file(surface);
-                    return; // create_file handles its own UI updates
-                } else if c.is_ascii() && !c.is_control() {
-                    self.input_text.push(c);
-                }
-
-                // Use optimized text update instead of full UI rebuild
-                self.update_input_text(surface);
-            }
-            FileManagerMode::NewFolder => {
-                if c == '\x08' {
-                    // Backspace
-                    self.input_text.pop();
-                } else if c == '\n' {
-                    // Enter key, create folder
-                    self.create_folder(surface);
-                    return; // create_folder handles its own UI updates
-                } else if c.is_ascii() && !c.is_control() {
-                    self.input_text.push(c);
-                }
-
-                // Use optimized text update instead of full UI rebuild
-                self.update_input_text(surface);
-            }
-            FileManagerMode::Rename(_) => {
-                if c == '\x08' {
-                    // Backspace
-                    self.input_text.pop();
-                } else if c == '\n' {
-                    // Enter key, perform rename
-                    self.perform_rename(surface);
-                    return; // perform_rename handles its own UI updates
-                } else if c.is_ascii() && !c.is_control() {
-                    self.input_text.push(c);
-                }
-
-                // Use optimized text update instead of full UI rebuild
-                self.update_input_text(surface);
-            }
-            _ => {}
-        }
-    }
-
-    pub fn handle_key_input(&mut self, key: KeyCode, surface: &mut Surface) {
-        match &self.mode {
-            FileManagerMode::NewFile | FileManagerMode::NewFolder | FileManagerMode::Rename(_) => {
-                match key {
-                    KeyCode::Backspace => {
-                        self.input_text.pop();
-                        // Use optimized text update instead of full UI rebuild
-                        self.update_input_text(surface);
-                    }
-                    KeyCode::Return => match &self.mode {
-                        FileManagerMode::NewFile => self.create_file(surface),
-                        FileManagerMode::NewFolder => self.create_folder(surface),
-                        FileManagerMode::Rename(_) => self.perform_rename(surface),
-                        _ => {}
-                    },
-                    _ => {}
-                }
-            }
-            FileManagerMode::Browse => match key {
-                KeyCode::ArrowUp => {
-                    if let Some(ref mut idx) = self.selected_file_index {
-                        if *idx > 0 {
-                            *idx -= 1;
-                            // Use optimized selection update instead of full UI rebuild
-                            self.update_file_selection(surface);
-                        }
-                    } else if !self.files.is_empty() {
-                        self.selected_file_index = Some(self.files.len() - 1);
-                        // Use optimized selection update instead of full UI rebuild
-                        self.update_file_selection(surface);
-                    }
-                }
-                KeyCode::ArrowDown => {
-                    if let Some(ref mut idx) = self.selected_file_index {
-                        if *idx < self.files.len() - 1 {
-                            *idx += 1;
-                            // Use optimized selection update instead of full UI rebuild
-                            self.update_file_selection(surface);
-                        }
-                    } else if !self.files.is_empty() {
-                        self.selected_file_index = Some(0);
-                        // Use optimized selection update instead of full UI rebuild
-                        self.update_file_selection(surface);
-                    }
-                }
-                KeyCode::Return => {
-                    if let Some(idx) = self.selected_file_index {
-                        if let Some(file) = self.files.get(idx).cloned() {
-                            if file.is_directory {
-                                // Navigate into directory
-                                if let Ok(_) = self.navigate_into_directory(&file.name) {
-                                    self.setup_ui(surface);
-                                }
-                            } else {
-                                // Open file
-                                self.mode = FileManagerMode::ViewFile(file);
-                                self.setup_ui(surface);
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
         }
     }
 
@@ -2350,9 +2209,157 @@ impl FileManager {
             format!("{}", self.current_path)
         }
     }
+}
 
-    pub fn render(&mut self, _surface: &mut Surface) {
+impl Application for FileManager {
+    fn init(&mut self, surface: &mut Surface) {
+        self.setup_ui(surface);
+    }
+
+    fn handle_char_input(&mut self, c: char, _ctrl_pressed: bool, surface: &mut Surface) {
+        match &self.mode {
+            FileManagerMode::Browse => {
+                if c == '\n' {
+                    self.handle_view_file(surface);
+                }
+            }
+            FileManagerMode::NewFile => {
+                if c == '\x08' {
+                    // Backspace
+                    self.input_text.pop();
+                } else if c == '\n' {
+                    // Enter key, create file
+                    self.create_file(surface);
+                    return; // create_file handles its own UI updates
+                } else if c.is_ascii() && !c.is_control() {
+                    self.input_text.push(c);
+                }
+
+                // Use optimized text update instead of full UI rebuild
+                self.update_input_text(surface);
+            }
+            FileManagerMode::NewFolder => {
+                if c == '\x08' {
+                    // Backspace
+                    self.input_text.pop();
+                } else if c == '\n' {
+                    // Enter key, create folder
+                    self.create_folder(surface);
+                    return; // create_folder handles its own UI updates
+                } else if c.is_ascii() && !c.is_control() {
+                    self.input_text.push(c);
+                }
+
+                // Use optimized text update instead of full UI rebuild
+                self.update_input_text(surface);
+            }
+            FileManagerMode::Rename(_) => {
+                if c == '\x08' {
+                    // Backspace
+                    self.input_text.pop();
+                } else if c == '\n' {
+                    // Enter key, perform rename
+                    self.perform_rename(surface);
+                    return; // perform_rename handles its own UI updates
+                } else if c.is_ascii() && !c.is_control() {
+                    self.input_text.push(c);
+                }
+
+                // Use optimized text update instead of full UI rebuild
+                self.update_input_text(surface);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_key_input(&mut self, key: KeyCode, surface: &mut Surface) {
+        match &self.mode {
+            FileManagerMode::NewFile | FileManagerMode::NewFolder | FileManagerMode::Rename(_) => {
+                match key {
+                    KeyCode::Backspace => {
+                        self.input_text.pop();
+                        // Use optimized text update instead of full UI rebuild
+                        self.update_input_text(surface);
+                    }
+                    KeyCode::Return => match &self.mode {
+                        FileManagerMode::NewFile => self.create_file(surface),
+                        FileManagerMode::NewFolder => self.create_folder(surface),
+                        FileManagerMode::Rename(_) => self.perform_rename(surface),
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+            FileManagerMode::Browse => match key {
+                KeyCode::ArrowUp => {
+                    if let Some(ref mut idx) = self.selected_file_index {
+                        if *idx > 0 {
+                            *idx -= 1;
+                            // Use optimized selection update instead of full UI rebuild
+                            self.update_file_selection(surface);
+                        }
+                    } else if !self.files.is_empty() {
+                        self.selected_file_index = Some(self.files.len() - 1);
+                        // Use optimized selection update instead of full UI rebuild
+                        self.update_file_selection(surface);
+                    }
+                }
+                KeyCode::ArrowDown => {
+                    if let Some(ref mut idx) = self.selected_file_index {
+                        if *idx < self.files.len() - 1 {
+                            *idx += 1;
+                            // Use optimized selection update instead of full UI rebuild
+                            self.update_file_selection(surface);
+                        }
+                    } else if !self.files.is_empty() {
+                        self.selected_file_index = Some(0);
+                        // Use optimized selection update instead of full UI rebuild
+                        self.update_file_selection(surface);
+                    }
+                }
+                KeyCode::Return => {
+                    if let Some(idx) = self.selected_file_index {
+                        if let Some(file) = self.files.get(idx).cloned() {
+                            if file.is_directory {
+                                // Navigate into directory
+                                if let Ok(_) = self.navigate_into_directory(&file.name) {
+                                    self.setup_ui(surface);
+                                }
+                            } else {
+                                // Open file
+                                self.mode = FileManagerMode::ViewFile(file);
+                                self.setup_ui(surface);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    fn handle_mouse_click(&mut self, x: usize, y: usize, surface: &mut Surface) {
+        match &self.mode {
+            FileManagerMode::Browse => self.handle_browse_click(x, y, surface),
+            FileManagerMode::NewFile => self.handle_new_file_click(x, y, surface),
+            FileManagerMode::NewFolder => self.handle_new_folder_click(x, y, surface),
+            FileManagerMode::DeleteFile => self.handle_delete_click(x, y, surface),
+            FileManagerMode::DeleteFolder => self.handle_delete_folder_click(x, y, surface),
+            FileManagerMode::ViewFile(_) => self.handle_view_click(x, y, surface),
+            FileManagerMode::Rename(_) => self.handle_rename_click(x, y, surface),
+        };
+    }
+
+    fn render(&mut self, _surface: &mut Surface) {
         // The UI is already set up, just make sure it's current
         // This could be extended to handle dynamic updates
+    }
+
+    fn get_title(&self) -> Option<String> {
+        match &self.mode {
+            FileManagerMode::Browse => Some(format!("File Manager - {}", self.current_path)),
+            _ => None,
+        }
     }
 }

@@ -1,7 +1,12 @@
-use alloc::{format, string::ToString, vec::Vec};
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
 use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
 
 use crate::{
+    desktop::application::Application,
     framebuffer::Color,
     surface::{Shape, Surface},
     sysinfo::{SystemInfo, estimate_heap_usage, estimate_stack_usage, format_memory_size},
@@ -15,7 +20,7 @@ pub struct SysInfo {
 }
 
 impl SysInfo {
-    pub fn new() -> Self {
+    pub fn new(_args: Option<String>) -> Self {
         Self {
             system_info: SystemInfo::gather(),
             text_lines: Vec::new(),
@@ -23,8 +28,10 @@ impl SysInfo {
             refreshed: false,
         }
     }
+}
 
-    pub fn init(&mut self, surface: &mut Surface) {
+impl Application for SysInfo {
+    fn init(&mut self, surface: &mut Surface) {
         let mut y_offset = 20;
         let line_height = 18;
         let x_start = 15;
@@ -327,22 +334,18 @@ impl SysInfo {
         });
     }
 
-    pub fn handle_mouse_click(&mut self, x: usize, y: usize) {
+    fn handle_mouse_click(&mut self, x: usize, y: usize, _surface: &mut Surface) {
         // Check if click is on refresh button
         if x >= self.refresh_button_region.0
             && x < self.refresh_button_region.0 + self.refresh_button_region.2
             && y >= self.refresh_button_region.1
             && y < self.refresh_button_region.1 + self.refresh_button_region.3
         {
-            self.refresh_data();
+            self.refreshed = true;
         }
     }
 
-    fn refresh_data(&mut self) {
-        self.refreshed = true;
-    }
-
-    pub fn render(&mut self, surface: &mut Surface) {
+    fn render(&mut self, surface: &mut Surface) {
         if self.refreshed {
             let stack_usage = estimate_stack_usage();
             let heap_usage = estimate_heap_usage();
@@ -371,5 +374,11 @@ impl SysInfo {
 
             self.refreshed = false;
         }
+    }
+
+    fn handle_char_input(&mut self, _c: char, _ctrl_pressed: bool, _surface: &mut Surface) {}
+    fn handle_key_input(&mut self, _key: pc_keyboard::KeyCode, _surface: &mut Surface) {}
+    fn get_title(&self) -> Option<String> {
+        None
     }
 }

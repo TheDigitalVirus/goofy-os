@@ -12,7 +12,7 @@
  - [ ] Snake game
  - [ ] Terminal
  - [x] Icons
- - [ ] Use icons in the system (startmenu, file explorer, etc)
+ - [ ] Use icons in the system (file explorer)
  - [x] BACKBUFFER
    - [x] Cleanup backbuffer code
    - [x] Make backbuffer optional (config)

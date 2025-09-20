@@ -13,7 +13,7 @@ Online docs: [https://retrogradedev.github.io/goofy-os/](https://retrogradedev.g
 Goofy OS is a lightweight, feature-rich operating system built from scratch in Rust. It aims to provide a modern computing experience while showcasing advanced OS concepts and design principles.
 
 **Preview**
-https://github.com/user-attachments/assets/ccc8e8ea-2149-4c18-8c31-aaea638619d7
+[![Desktop](./docs/media/desktop.png)]()
 
 ## Features
 

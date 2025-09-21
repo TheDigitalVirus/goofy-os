@@ -7,6 +7,18 @@ layout: default
 
 **A Comprehensive Guide to a Rust-Based Operating System**
 
+Have you ever wondered how Operation Systems like Windows, Linux, or macOS work under the hood? Me too!
+That's why I created Goofy OS, a complete operating system written from scratch in Rust, to explore and demonstrate the core concepts of OS design and implementation.
+This is a real but very basic OS, not just a website or a game pretending to be one, actually, it could perfectly run on a real computer if you write it to a bootable USB drive or burn it to a CD/DVD.
+<br><br>
+Goofy OS is made for educational purposes, to help OSDev enthusiasts understand how operating systems function at a low level.
+<br><br>
+Goofy OS features a full graphical user interface (GUI) desktop environment, a complete FAT32 file system, advanced memory management, and comprehensive interrupt handling, all built without relying on any standard library (`#![no_std]`).
+
+<video controls width="600" src="./media/preview.mp4">
+    Your browser does not support the video tag.
+</video>
+
 ---
 
 ## Table of Contents
@@ -996,7 +1008,7 @@ impl Color {
 **Memory Usage:**
 - Kernel base size: ~2MB
 - Heap allocation: 100KB (configurable)
-- Per-window overhead: ~50KB
+- Per-window overhead: ~20KB
 - File system cache: Dynamic
 
 **Storage Performance:**
@@ -1324,7 +1336,6 @@ Total: ~1.5 seconds
 - Improved taskbar with window previews
 
 **File System Improvements:**
-- Copy, move, and rename operations
 - File search functionality
 - Permissions and access control
 - Disk usage analysis tools

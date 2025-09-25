@@ -277,3 +277,56 @@ impl ProcessAddressSpace {
         }
     }
 }
+
+pub unsafe fn enable_user_memory_access(physical_memory_offset: VirtAddr) {
+    // FIXME: HADOUKEN
+    unsafe {
+        for entry in active_level_4_table(physical_memory_offset).iter_mut() {
+            if entry.is_unused() {
+                continue;
+            }
+
+            entry.set_flags(entry.flags() | PageTableFlags::USER_ACCESSIBLE);
+
+            if let Ok(level_3_page_table) = entry.frame().map(|frame: PhysFrame| {
+                &mut *(physical_memory_offset + frame.start_address().as_u64())
+                    .as_mut_ptr::<PageTable>()
+            }) {
+                for entry in level_3_page_table.iter_mut() {
+                    if entry.is_unused() {
+                        continue;
+                    }
+
+                    entry.set_flags(entry.flags() | PageTableFlags::USER_ACCESSIBLE);
+
+                    if let Ok(level_2_page_table) = entry.frame().map(|frame| {
+                        &mut *(physical_memory_offset + frame.start_address().as_u64())
+                            .as_mut_ptr::<PageTable>()
+                    }) {
+                        for entry in level_2_page_table.iter_mut() {
+                            if entry.is_unused() {
+                                continue;
+                            }
+
+                            entry.set_flags(entry.flags() | PageTableFlags::USER_ACCESSIBLE);
+
+                            if let Ok(level_1_page_table) = entry.frame().map(|frame| {
+                                &mut *(physical_memory_offset + frame.start_address().as_u64())
+                                    .as_mut_ptr::<PageTable>()
+                            }) {
+                                for entry in level_1_page_table.iter_mut() {
+                                    if entry.is_unused() {
+                                        continue;
+                                    }
+
+                                    entry
+                                        .set_flags(entry.flags() | PageTableFlags::USER_ACCESSIBLE);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

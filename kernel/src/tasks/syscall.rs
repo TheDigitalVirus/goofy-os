@@ -23,7 +23,6 @@ pub(crate) extern "C" fn syscall_handler() {
 
         // Load address of SYSHANDLER_TABLE RIP-relatively, then fetch entry
         "lea rdx, [rip + {sys_handler}]",
-        "mov rdx, [rdx]",           // rdx = &SYSHANDLER_TABLE (pointer to table)
         "mov rdx, [rdx + rax*8]",   // rdx = table.handle[rax]
         "call rdx",
 

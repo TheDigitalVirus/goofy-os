@@ -6,7 +6,7 @@ use core::prelude::rust_2024::derive;
 const OS_NAME: &str = "Goofy OS";
 const OS_VERSION: &str = "0.1.0";
 const ARCHITECTURE: &str = "x86_64";
-const PROCESSES_ENABLED: bool = false;
+const PROCESSES_ENABLED: bool = true;
 const BACKBUFFER_ENABLED: bool = true;
 
 #[derive(PartialEq)]

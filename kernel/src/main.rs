@@ -42,7 +42,7 @@ extern "C" fn user_foo() {
     let str = b"Hello from user_foo!\n\0";
 
     // try to use directly the serial device
-    //println!("Hello from COM1!");
+    // println!("Hello from COM1!");
 
     syscall!(SYSNO_WRITE, str.as_ptr() as u64, str.len());
     #[allow(forgetting_references)]
@@ -111,6 +111,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             )
         };
     };
+
+    unsafe {
+        memory::enable_user_memory_access(phys_mem_offset);
+    }
 
     #[cfg(processes_enabled)]
     {

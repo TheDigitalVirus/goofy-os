@@ -1,5 +1,5 @@
 use crate::syscalls::SYSHANDLER_TABLE;
-use core::arch::{asm, naked_asm};
+use core::arch::naked_asm;
 
 /// Helper function to save and to restore the register states
 /// during a system call. `rax` is the system call identifier.

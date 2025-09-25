@@ -6,7 +6,6 @@ pub mod task;
 
 use core::arch::asm;
 
-use crate::gdt::GDT;
 use crate::hlt_loop;
 
 pub fn init() {

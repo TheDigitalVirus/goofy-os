@@ -1,5 +1,4 @@
 use config::{BootMode, CONFIG};
-use std::fs;
 
 const KERNEL_BINARY: &str = env!("KERNEL_BINARY");
 

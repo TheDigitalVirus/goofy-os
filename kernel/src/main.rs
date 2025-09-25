@@ -44,7 +44,10 @@ extern "C" fn user_foo() {
     // try to use directly the serial device
     // println!("Hello from COM1!");
 
-    syscall!(SYSNO_WRITE, str.as_ptr() as u64, str.len());
+    for _ in 0..20 {
+        syscall!(SYSNO_WRITE, str.as_ptr() as u64, str.len());
+    }
+
     #[allow(forgetting_references)]
     core::mem::forget(str);
     syscall!(SYSNO_EXIT);
@@ -60,7 +63,9 @@ extern "C" fn create_user_foo() {
 
 #[cfg(processes_enabled)]
 extern "C" fn foo() {
-    println!("hello from task {}", scheduler::get_current_taskid());
+    for _ in 0..20 {
+        serial_println!("hello from task {}", scheduler::get_current_taskid());
+    }
 }
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
@@ -122,9 +127,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         init();
         serial_println!("Spawn tasks...");
 
-        for _i in 0..2 {
-            scheduler::spawn(foo, NORMAL_PRIORITY).unwrap();
-        }
+        scheduler::spawn(foo, NORMAL_PRIORITY).unwrap();
         scheduler::spawn(create_user_foo, NORMAL_PRIORITY).unwrap();
 
         serial_println!("Reschedule...");

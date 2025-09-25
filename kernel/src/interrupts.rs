@@ -3,12 +3,6 @@ use crate::apic;
 use crate::{hlt_loop, println, serial_println};
 use core::u64;
 
-#[cfg(processes_enabled)]
-use core::arch::asm;
-
-#[cfg(processes_enabled)]
-use x86_64::instructions::interrupts;
-
 use lazy_static::lazy_static;
 #[cfg(not(uefi))]
 use pic8259::ChainedPics;
@@ -26,9 +20,6 @@ pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 pub const KEYBOARD_INTERRUPT: u8 = PIC_1_OFFSET + 1;
 pub const MOUSE_INTERRUPT: u8 = PIC_1_OFFSET + 12;
-
-#[cfg(processes_enabled)]
-const PROCESS_EXITED: u64 = u64::MAX;
 
 #[cfg(not(uefi))]
 pub static PICS: spin::Mutex<ChainedPics> =

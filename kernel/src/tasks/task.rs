@@ -5,7 +5,7 @@ use core::cell::RefCell;
 use core::fmt;
 use x86_64::VirtAddr;
 
-use crate::{KERNEL_STACK, Stack, msb};
+use crate::{INTERRUPT_STACK_SIZE, KERNEL_STACK, STACK_SIZE, Stack, msb};
 
 /// The status of the task - used for scheduling
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

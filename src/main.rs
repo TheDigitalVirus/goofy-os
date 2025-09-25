@@ -1,6 +1,11 @@
 use config::{BootMode, CONFIG};
+use std::fs;
+
+const KERNEL_BINARY: &str = env!("KERNEL_BINARY");
 
 fn main() {
+    println!("kernel binary at: {KERNEL_BINARY}");
+
     // read env variables that were set in build script
     let (path, uefi) = if CONFIG.boot_mode == BootMode::Uefi {
         (env!("UEFI_PATH"), true)
@@ -11,6 +16,8 @@ fn main() {
     let mut cmd = std::process::Command::new("qemu-system-x86_64");
     cmd.arg("-m").arg("256M");
     cmd.arg("-serial").arg("stdio");
+    cmd.arg("-s");
+    cmd.arg("-monitor").arg("tcp:127.0.0.1:4321,server,nowait");
     if uefi {
         cmd.arg("-bios").arg(ovmf_prebuilt::ovmf_pure_efi());
         cmd.arg("-drive").arg(format!("format=raw,file={path}"));

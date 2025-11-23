@@ -4,7 +4,12 @@ pub mod switch;
 pub mod syscall;
 pub mod task;
 
+use crate::errno::Result;
+use crate::memory::ProcessAddressSpace;
+use crate::tasks::scheduler::SCHEDULER;
+use crate::tasks::task::{TaskId, TaskPriority};
 use core::arch::asm;
+use x86_64::VirtAddr;
 
 use crate::hlt_loop;
 
@@ -17,20 +22,20 @@ pub fn init() {
 /// # Safety
 ///
 /// Be sure the the user-level function mapped into the user space.
-pub unsafe fn jump_to_user_land(func: extern "C" fn()) -> ! {
+pub unsafe fn jump_to_user_land(func: extern "C" fn(), user_stack: VirtAddr) -> ! {
     unsafe {
         let ds = 0x1bu64; // User data segment: (3 << 3) | 3 = 27
         let cs = 0x23u64; // User code segment: (4 << 3) | 3 = 35
 
         asm!(
             "push {0}",
-            "push rsp",
-            "add QWORD PTR [rsp], 16",
-            "pushf",
             "push {1}",
+            "pushf",
             "push {2}",
+            "push {3}",
             "iretq",
             in(reg) ds,
+            in(reg) user_stack.as_u64(),
             in(reg) cs,
             in(reg) func as usize,
             options(nostack)
@@ -243,4 +248,23 @@ pub fn syscall6(
         );
     }
     ret
+}
+
+/// Create a new kernel task
+pub fn spawn(func: extern "C" fn(), prio: TaskPriority) -> Result<TaskId> {
+    unsafe { SCHEDULER.as_mut().unwrap().spawn(func, prio) }
+}
+
+/// Create a new process task
+pub fn spawn_process(
+    func: extern "C" fn(),
+    prio: TaskPriority,
+    address_space: ProcessAddressSpace,
+) -> Result<TaskId> {
+    unsafe {
+        SCHEDULER
+            .as_mut()
+            .unwrap()
+            .spawn_process(func, prio, address_space)
+    }
 }

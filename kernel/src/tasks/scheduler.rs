@@ -7,7 +7,10 @@ use alloc::rc::Rc;
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicU32, Ordering};
 use x86_64::VirtAddr;
+use x86_64::registers::control::Cr3;
+use x86_64::structures::paging::{PhysFrame, Size4KiB};
 
+use crate::memory::ProcessAddressSpace;
 use crate::serial_println;
 use crate::tasks::switch::switch;
 use crate::tasks::task::{Task, TaskId, TaskStatus};
@@ -25,6 +28,8 @@ pub(crate) struct Scheduler {
     finished_tasks: VecDeque<TaskId>,
     // map between task id and task control block
     tasks: BTreeMap<TaskId, Rc<RefCell<Task>>>,
+    /// Kernel page table frame
+    kernel_page_table: PhysFrame<Size4KiB>,
 }
 
 impl Scheduler {
@@ -35,12 +40,15 @@ impl Scheduler {
 
         tasks.insert(tid, idle_task.clone());
 
+        let (kernel_page_table, _) = Cr3::read();
+
         Scheduler {
             current_task: idle_task.clone(),
             idle_task: idle_task.clone(),
             ready_queue: PriorityTaskQueue::new(),
             finished_tasks: VecDeque::<TaskId>::new(),
             tasks,
+            kernel_page_table,
         }
     }
 
@@ -73,6 +81,38 @@ impl Scheduler {
             self.tasks.insert(tid, task);
 
             serial_println!("Creating task {}", tid);
+
+            Ok(tid)
+        };
+
+        irqsave(closure)
+    }
+
+    pub fn spawn_process(
+        &mut self,
+        func: extern "C" fn(),
+        prio: TaskPriority,
+        address_space: ProcessAddressSpace,
+    ) -> Result<TaskId> {
+        let closure = || {
+            let prio_number: usize = prio.into().into();
+
+            if prio_number >= NO_PRIORITIES {
+                return Err(Error::BadPriority);
+            }
+
+            // Create the new task.
+            let tid = self.get_tid();
+            let task = Rc::new(RefCell::new(Task::new(tid, TaskStatus::Ready, prio)));
+
+            task.borrow_mut().address_space = Some(address_space);
+            task.borrow_mut().create_stack_frame(func);
+
+            // Add it to the task lists.
+            self.ready_queue.push(task.clone());
+            self.tasks.insert(tid, task);
+
+            serial_println!("Creating process task {}", tid);
 
             Ok(tid)
         };
@@ -221,6 +261,17 @@ impl Scheduler {
 
             self.current_task = new_task;
 
+            let new_cr3 = if let Some(ref space) = self.current_task.borrow().address_space {
+                space.page_table_frame
+            } else {
+                self.kernel_page_table
+            };
+
+            unsafe {
+                let (_, flags) = Cr3::read();
+                Cr3::write(new_cr3, flags);
+            }
+
             unsafe {
                 switch(current_stack_pointer, new_stack_pointer);
             }
@@ -232,7 +283,7 @@ impl Scheduler {
     }
 }
 
-static mut SCHEDULER: Option<Scheduler> = None;
+pub(crate) static mut SCHEDULER: Option<Scheduler> = None;
 
 /// Initialize module, must be called once, and only once
 pub fn init() {

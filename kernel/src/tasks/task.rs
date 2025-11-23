@@ -5,6 +5,7 @@ use core::cell::RefCell;
 use core::fmt;
 use x86_64::VirtAddr;
 
+use crate::memory::ProcessAddressSpace;
 use crate::{INTERRUPT_STACK_SIZE, KERNEL_STACK, STACK_SIZE, Stack, msb};
 
 /// The status of the task - used for scheduling
@@ -173,6 +174,8 @@ pub(crate) struct Task {
     pub last_stack_pointer: usize,
     /// Stack of the task
     pub stack: Box<dyn Stack>,
+    /// Address space of the task
+    pub address_space: Option<ProcessAddressSpace>,
 }
 
 impl Task {
@@ -183,6 +186,7 @@ impl Task {
             status: TaskStatus::Idle,
             last_stack_pointer: 0,
             stack: Box::new(KERNEL_STACK.get().unwrap().clone()),
+            address_space: None,
         }
     }
 
@@ -193,6 +197,7 @@ impl Task {
             status,
             last_stack_pointer: 0,
             stack: Box::new(TaskStack::new()),
+            address_space: None,
         }
     }
 }

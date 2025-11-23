@@ -15,7 +15,7 @@ config = { path = "config" }
 ovmf-prebuilt = "0.1.0-alpha.1"
 
 [workspace]
-members = [ "config","kernel"]
+members = [ "config","kernel", "user_programs/simple_test"]
 
 [profile.dev]
 panic = "abort"

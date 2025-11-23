@@ -15,20 +15,16 @@ use bootloader_api::{BootInfo, entry_point};
 use kernel::apic;
 use kernel::gdt::STACK_SIZE;
 
-#[cfg(processes_enabled)]
-use kernel::syscalls::{SYSNO_EXIT, SYSNO_WRITE};
-
 use kernel::sysinfo::{STACK_BASE, get_stack_pointer};
 
 #[cfg(processes_enabled)]
-use kernel::syscall;
-#[cfg(processes_enabled)]
 use kernel::tasks::task::NORMAL_PRIORITY;
 #[cfg(processes_enabled)]
-use kernel::tasks::{init, jump_to_user_land, scheduler, syscall0, syscall2};
+use kernel::tasks::{init, jump_to_user_land, scheduler, spawn_process};
 
 use kernel::{BOOT_IST_STACK, INTERRUPT_STACK_SIZE};
 
+use kernel::user_program_loader;
 use kernel::{BootStack, KERNEL_STACK, interrupts as kernel_interrupts};
 use kernel::{desktop::main::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
 
@@ -37,27 +33,19 @@ use kernel::{allocator, memory};
 use x86_64::VirtAddr;
 use x86_64::instructions::interrupts;
 
-#[cfg(processes_enabled)]
-extern "C" fn user_foo() {
-    let str = b"Hello from user_foo!\n\0";
+const USER_PROGRAM_BYTES: &[u8] =
+    include_bytes!("../../target/x86_64-unknown-none/release/simple_test");
 
-    // try to use directly the serial device
-    // println!("Hello from COM1!");
-
-    for _ in 0..20 {
-        syscall!(SYSNO_WRITE, str.as_ptr() as u64, str.len());
-    }
-
-    #[allow(forgetting_references)]
-    core::mem::forget(str);
-    syscall!(SYSNO_EXIT);
-}
+static mut USER_ENTRY_POINT: VirtAddr = VirtAddr::zero();
+static mut USER_STACK_POINTER: VirtAddr = VirtAddr::zero();
 
 #[cfg(processes_enabled)]
-extern "C" fn create_user_foo() {
-    serial_println!("jump to user land");
+extern "C" fn start_user_program() {
     unsafe {
-        jump_to_user_land(user_foo);
+        let entry = USER_ENTRY_POINT;
+        let stack = USER_STACK_POINTER;
+        let func: extern "C" fn() = core::mem::transmute(entry.as_u64());
+        jump_to_user_land(func, stack);
     }
 }
 
@@ -128,7 +116,21 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         serial_println!("Spawn tasks...");
 
         scheduler::spawn(foo, NORMAL_PRIORITY).unwrap();
-        scheduler::spawn(create_user_foo, NORMAL_PRIORITY).unwrap();
+
+        // Load user program
+        let user_program = user_program_loader::load_elf(USER_PROGRAM_BYTES, &mut frame_allocator)
+            .expect("Failed to load user program");
+        unsafe {
+            USER_ENTRY_POINT = user_program.entry_point;
+            USER_STACK_POINTER = user_program.stack_pointer;
+        };
+
+        spawn_process(
+            start_user_program,
+            NORMAL_PRIORITY,
+            user_program.address_space,
+        )
+        .unwrap();
 
         serial_println!("Reschedule...");
 

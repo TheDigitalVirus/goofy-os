@@ -49,6 +49,7 @@ pub mod serial;
 pub mod surface;
 pub mod sysinfo;
 pub mod time;
+pub mod user_program_loader;
 
 #[cfg(processes_enabled)]
 pub mod syscalls;

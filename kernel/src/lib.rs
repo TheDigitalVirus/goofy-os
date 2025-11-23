@@ -42,6 +42,7 @@ pub mod exit;
 pub mod framebuffer;
 pub mod fs;
 pub mod gdt;
+pub mod init;
 pub mod interrupts;
 pub mod irq;
 pub mod memory;
@@ -115,7 +116,7 @@ pub(crate) fn msb(value: usize) -> Option<usize> {
     }
 }
 
-pub trait Stack {
+pub trait Stack: Send {
     fn top(&self) -> VirtAddr;
     fn bottom(&self) -> VirtAddr;
     fn interrupt_top(&self) -> VirtAddr;

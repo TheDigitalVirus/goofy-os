@@ -12,19 +12,18 @@ use x86_64::{
 
 use crate::serial_println;
 
-pub const HEAP_START: usize = 0x_4444_4444_0000;
-pub const HEAP_SIZE: usize = 100 * 1024; // 100 KiB
-
 #[global_allocator]
 pub static mut ALLOCATOR: CountingAllocator = CountingAllocator::empty();
 
 pub fn init_heap(
     mapper: &mut impl Mapper<Size4KiB>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+    heap_start: u64,
+    heap_size: u64,
 ) -> Result<(), MapToError<Size4KiB>> {
     let page_range = {
-        let heap_start = VirtAddr::new(HEAP_START as u64);
-        let heap_end = heap_start + HEAP_SIZE as u64 - 1u64;
+        let heap_start = VirtAddr::new(heap_start);
+        let heap_end = heap_start + heap_size - 1u64;
         let heap_start_page = Page::containing_address(heap_start);
         let heap_end_page = Page::containing_address(heap_end);
         Page::range_inclusive(heap_start_page, heap_end_page)
@@ -38,21 +37,24 @@ pub fn init_heap(
     }
 
     unsafe {
-        init_allocator(&raw mut ALLOCATOR, HEAP_START, HEAP_SIZE);
+        init_allocator(&raw mut ALLOCATOR, heap_start, heap_size);
     }
 
     serial_println!(
         "Heap initialized successfully at {:#x} with size {} bytes",
-        HEAP_START,
-        HEAP_SIZE
+        heap_start,
+        heap_size
     );
 
     Ok(())
 }
 
-unsafe fn init_allocator(allocator: *mut CountingAllocator, start: usize, size: usize) {
+unsafe fn init_allocator(allocator: *mut CountingAllocator, start: u64, size: u64) {
     unsafe {
-        (*allocator).inner.lock().init(start as *mut u8, size);
+        (*allocator)
+            .inner
+            .lock()
+            .init(start as *mut u8, size as usize);
         (*allocator).allocated.store(0, Ordering::SeqCst);
     };
 }

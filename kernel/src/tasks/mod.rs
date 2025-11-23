@@ -6,7 +6,6 @@ pub mod task;
 
 use crate::errno::Result;
 use crate::memory::ProcessAddressSpace;
-use crate::tasks::scheduler::SCHEDULER;
 use crate::tasks::task::{TaskId, TaskPriority};
 use core::arch::asm;
 use x86_64::VirtAddr;
@@ -252,7 +251,7 @@ pub fn syscall6(
 
 /// Create a new kernel task
 pub fn spawn(func: extern "C" fn(), prio: TaskPriority) -> Result<TaskId> {
-    unsafe { SCHEDULER.as_mut().unwrap().spawn(func, prio) }
+    scheduler::spawn(func, prio)
 }
 
 /// Create a new process task
@@ -261,10 +260,5 @@ pub fn spawn_process(
     prio: TaskPriority,
     address_space: ProcessAddressSpace,
 ) -> Result<TaskId> {
-    unsafe {
-        SCHEDULER
-            .as_mut()
-            .unwrap()
-            .spawn_process(func, prio, address_space)
-    }
+    scheduler::spawn_process(func, prio, address_space)
 }

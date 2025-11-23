@@ -6,9 +6,10 @@ use alloc::{
 use config::CONFIG;
 
 use crate::{
-    allocator::{ALLOCATOR, HEAP_SIZE, HEAP_START},
+    allocator::ALLOCATOR,
     fs::manager::FILESYSTEM,
     gdt::STACK_SIZE,
+    init::{HEAP_SIZE, HEAP_START},
 };
 
 pub static mut STACK_BASE: usize = 0;
@@ -22,9 +23,9 @@ pub struct SystemInfo {
     pub processor_model: String,
     pub base_frequency: Option<u16>,
     pub max_frequency: Option<u16>,
-    pub heap_size: usize,
-    pub heap_start: usize,
-    pub heap_used: usize,
+    pub heap_size: u64,
+    pub heap_start: u64,
+    pub heap_used: u64,
     pub stack_size: usize,
     pub cpu_features: Vec<String>,
     pub filesystem_info: Option<FilesystemInfo>,
@@ -57,9 +58,9 @@ impl SystemInfo {
 }
 
 pub struct HeapInfo {
-    pub used_bytes: usize,
-    pub free_bytes: usize,
-    pub total_bytes: usize,
+    pub used_bytes: u64,
+    pub free_bytes: u64,
+    pub total_bytes: u64,
 }
 
 pub struct CpuInfo {
@@ -93,10 +94,10 @@ fn get_heap_info() -> HeapInfo {
     }
 }
 
-pub fn estimate_heap_usage() -> usize {
+pub fn estimate_heap_usage() -> u64 {
     unsafe {
         let allocator = &raw mut ALLOCATOR;
-        (*allocator).allocated()
+        (*allocator).allocated() as u64
     }
 }
 
@@ -170,7 +171,7 @@ fn get_cpu_info() -> CpuInfo {
     }
 }
 
-pub fn format_memory_size(bytes: usize) -> String {
+pub fn format_memory_size(bytes: u64) -> String {
     if bytes >= 1024 * 1024 * 1024 {
         format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     } else if bytes >= 1024 * 1024 {

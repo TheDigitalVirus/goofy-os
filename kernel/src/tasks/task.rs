@@ -1,8 +1,8 @@
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
-use alloc::rc::Rc;
-use core::cell::RefCell;
+use alloc::sync::Arc;
 use core::fmt;
+use spinning_top::Spinlock;
 use x86_64::VirtAddr;
 
 use crate::memory::ProcessAddressSpace;
@@ -14,6 +14,7 @@ pub(crate) enum TaskStatus {
     Invalid,
     Ready,
     Running,
+    #[allow(dead_code)]
     Blocked,
     Finished,
     Idle,
@@ -67,14 +68,14 @@ pub const LOW_PRIORITY: TaskPriority = TaskPriority::from(0);
 
 /// Realize a priority queue for tasks
 pub(crate) struct PriorityTaskQueue {
-    queues: [VecDeque<Rc<RefCell<Task>>>; NO_PRIORITIES],
+    queues: [VecDeque<Arc<Spinlock<Task>>>; NO_PRIORITIES],
     prio_bitmap: usize,
 }
 
 impl PriorityTaskQueue {
     /// Creates an empty priority queue for tasks
     pub const fn new() -> PriorityTaskQueue {
-        const VALUE: VecDeque<Rc<RefCell<Task>>> = VecDeque::new();
+        const VALUE: VecDeque<Arc<Spinlock<Task>>> = VecDeque::new();
 
         PriorityTaskQueue {
             queues: [VALUE; NO_PRIORITIES],
@@ -83,15 +84,15 @@ impl PriorityTaskQueue {
     }
 
     /// Add a task by its priority to the queue
-    pub fn push(&mut self, task: Rc<RefCell<Task>>) {
-        let i: usize = task.borrow().prio.into().into();
+    pub fn push(&mut self, task: Arc<Spinlock<Task>>) {
+        let i: usize = task.lock().prio.into().into();
         //assert!(i < NO_PRIORITIES, "Priority {} is too high", i);
 
         self.prio_bitmap |= 1 << i;
         self.queues[i].push_back(task.clone());
     }
 
-    fn pop_from_queue(&mut self, queue_index: usize) -> Option<Rc<RefCell<Task>>> {
+    fn pop_from_queue(&mut self, queue_index: usize) -> Option<Arc<Spinlock<Task>>> {
         let task = self.queues[queue_index].pop_front();
         if self.queues[queue_index].is_empty() {
             self.prio_bitmap &= !(1 << queue_index);
@@ -101,7 +102,7 @@ impl PriorityTaskQueue {
     }
 
     /// Pop the task with the highest priority from the queue
-    pub fn pop(&mut self) -> Option<Rc<RefCell<Task>>> {
+    pub fn pop(&mut self) -> Option<Arc<Spinlock<Task>>> {
         if let Some(i) = msb(self.prio_bitmap) {
             return self.pop_from_queue(i);
         }
@@ -110,7 +111,7 @@ impl PriorityTaskQueue {
     }
 
     /// Pop the next task, which has a higher or the same priority as `prio`
-    pub fn pop_with_prio(&mut self, prio: TaskPriority) -> Option<Rc<RefCell<Task>>> {
+    pub fn pop_with_prio(&mut self, prio: TaskPriority) -> Option<Arc<Spinlock<Task>>> {
         if let Some(i) = msb(self.prio_bitmap) {
             if i >= prio.into().into() {
                 return self.pop_from_queue(i);

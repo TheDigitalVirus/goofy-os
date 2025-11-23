@@ -172,8 +172,8 @@ impl Application for SysInfo {
             y: y_offset,
             content: format!(
                 "Stack: {} / {}",
-                format_memory_size(stack_usage),
-                format_memory_size(self.system_info.stack_size)
+                format_memory_size(stack_usage as u64),
+                format_memory_size(self.system_info.stack_size as u64)
             ),
             color: Color::WHITE,
             background_color: Color::DARKGRAY,
@@ -280,7 +280,7 @@ impl Application for SysInfo {
                 y: y_offset,
                 content: format!(
                     "Total Size: {}",
-                    format_memory_size(fs_info.total_size as usize)
+                    format_memory_size(fs_info.total_size as u64)
                 ),
                 color: Color::WHITE,
                 background_color: Color::DARKGRAY,
@@ -366,8 +366,8 @@ impl Application for SysInfo {
                 stack_idx,
                 format!(
                     "Stack: {}/{}",
-                    format_memory_size(stack_usage),
-                    format_memory_size(self.system_info.stack_size)
+                    format_memory_size(stack_usage as u64),
+                    format_memory_size(self.system_info.stack_size as u64)
                 ),
                 None,
             );

@@ -3,9 +3,9 @@ use crate::irq::irqsave;
 use crate::tasks::register_task;
 use crate::tasks::task::{NO_PRIORITIES, PriorityTaskQueue, TaskFrame, TaskPriority};
 use alloc::collections::{BTreeMap, VecDeque};
-use alloc::rc::Rc;
-use core::cell::RefCell;
+use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU32, Ordering};
+use spinning_top::Spinlock;
 use x86_64::VirtAddr;
 use x86_64::registers::control::Cr3;
 use x86_64::structures::paging::{PhysFrame, Size4KiB};
@@ -19,15 +19,15 @@ static TID_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) struct Scheduler {
     /// task id which is currently running
-    current_task: Rc<RefCell<Task>>,
+    current_task: Arc<Spinlock<Task>>,
     /// task id of the idle task
-    idle_task: Rc<RefCell<Task>>,
+    idle_task: Arc<Spinlock<Task>>,
     /// queue of tasks, which are ready
     ready_queue: PriorityTaskQueue,
     /// queue of tasks, which are finished and can be released
     finished_tasks: VecDeque<TaskId>,
     // map between task id and task control block
-    tasks: BTreeMap<TaskId, Rc<RefCell<Task>>>,
+    tasks: BTreeMap<TaskId, Arc<Spinlock<Task>>>,
     /// Kernel page table frame
     kernel_page_table: PhysFrame<Size4KiB>,
 }
@@ -35,7 +35,7 @@ pub(crate) struct Scheduler {
 impl Scheduler {
     pub fn new() -> Scheduler {
         let tid = TaskId::from(TID_COUNTER.fetch_add(1, Ordering::SeqCst));
-        let idle_task = Rc::new(RefCell::new(Task::new_idle(tid)));
+        let idle_task = Arc::new(Spinlock::new(Task::new_idle(tid)));
         let mut tasks = BTreeMap::new();
 
         tasks.insert(tid, idle_task.clone());
@@ -72,9 +72,9 @@ impl Scheduler {
 
             // Create the new task.
             let tid = self.get_tid();
-            let task = Rc::new(RefCell::new(Task::new(tid, TaskStatus::Ready, prio)));
+            let task = Arc::new(Spinlock::new(Task::new(tid, TaskStatus::Ready, prio)));
 
-            task.borrow_mut().create_stack_frame(func);
+            task.lock().create_stack_frame(func);
 
             // Add it to the task lists.
             self.ready_queue.push(task.clone());
@@ -103,10 +103,10 @@ impl Scheduler {
 
             // Create the new task.
             let tid = self.get_tid();
-            let task = Rc::new(RefCell::new(Task::new(tid, TaskStatus::Ready, prio)));
+            let task = Arc::new(Spinlock::new(Task::new(tid, TaskStatus::Ready, prio)));
 
-            task.borrow_mut().address_space = Some(address_space);
-            task.borrow_mut().create_stack_frame(func);
+            task.lock().address_space = Some(address_space);
+            task.lock().create_stack_frame(func);
 
             // Add it to the task lists.
             self.ready_queue.push(task.clone());
@@ -120,63 +120,47 @@ impl Scheduler {
         irqsave(closure)
     }
 
-    pub fn exit(&mut self) -> ! {
-        let closure = || {
-            if self.current_task.borrow().status != TaskStatus::Idle {
-                serial_println!("finish task with id {}", self.current_task.borrow().id);
-                self.current_task.borrow_mut().status = TaskStatus::Finished;
-            } else {
-                panic!("unable to terminate idle task");
-            }
-        };
-
-        irqsave(closure);
-
-        self.reschedule();
-
-        // we should never reach this point
-        panic!("exit failed!");
+    pub fn exit(&mut self) {
+        if self.current_task.lock().status != TaskStatus::Idle {
+            serial_println!("finish task with id {}", self.current_task.lock().id);
+            self.current_task.lock().status = TaskStatus::Finished;
+        } else {
+            panic!("unable to terminate idle task");
+        }
     }
 
-    pub fn abort(&mut self) -> ! {
-        let closure = || {
-            if self.current_task.borrow().status != TaskStatus::Idle {
-                serial_println!("abort task with id {}", self.current_task.borrow().id);
-                self.current_task.borrow_mut().status = TaskStatus::Finished;
-            } else {
-                panic!("unable to terminate idle task");
-            }
-        };
-
-        irqsave(closure);
-
-        self.reschedule();
-
-        // we should never reach this point
-        panic!("abort failed!");
+    pub fn abort(&mut self) {
+        if self.current_task.lock().status != TaskStatus::Idle {
+            serial_println!("abort task with id {}", self.current_task.lock().id);
+            self.current_task.lock().status = TaskStatus::Finished;
+        } else {
+            panic!("unable to terminate idle task");
+        }
     }
 
-    pub fn block_current_task(&mut self) -> Rc<RefCell<Task>> {
+    #[allow(dead_code)]
+    pub fn block_current_task(&mut self) -> Arc<Spinlock<Task>> {
         let closure = || {
-            if self.current_task.borrow().status == TaskStatus::Running {
-                serial_println!("block task {}", self.current_task.borrow().id);
+            if self.current_task.lock().status == TaskStatus::Running {
+                serial_println!("block task {}", self.current_task.lock().id);
 
-                self.current_task.borrow_mut().status = TaskStatus::Blocked;
+                self.current_task.lock().status = TaskStatus::Blocked;
                 self.current_task.clone()
             } else {
-                panic!("unable to block task {}", self.current_task.borrow().id);
+                panic!("unable to block task {}", self.current_task.lock().id);
             }
         };
 
         irqsave(closure)
     }
 
-    pub fn wakeup_task(&mut self, task: Rc<RefCell<Task>>) {
+    #[allow(dead_code)]
+    pub fn wakeup_task(&mut self, task: Arc<Spinlock<Task>>) {
         let closure = || {
-            if task.borrow().status == TaskStatus::Blocked {
-                serial_println!("wakeup task {}", task.borrow().id);
+            if task.lock().status == TaskStatus::Blocked {
+                serial_println!("wakeup task {}", task.lock().id);
 
-                task.borrow_mut().status = TaskStatus::Ready;
+                task.lock().status = TaskStatus::Ready;
                 self.ready_queue.push(task.clone());
             }
         };
@@ -185,15 +169,15 @@ impl Scheduler {
     }
 
     pub fn get_current_taskid(&self) -> TaskId {
-        irqsave(|| self.current_task.borrow().id)
+        irqsave(|| self.current_task.lock().id)
     }
 
     /// Determines the start address of the stack
     pub fn get_current_interrupt_stack(&self) -> VirtAddr {
-        irqsave(|| (*self.current_task.borrow().stack).interrupt_top())
+        irqsave(|| (*self.current_task.lock().stack).interrupt_top())
     }
 
-    pub fn schedule(&mut self) {
+    pub fn schedule(&mut self) -> Option<(*mut usize, usize, PhysFrame<Size4KiB>)> {
         // do we have finished tasks? => drop tasks => deallocate implicitly the stack
         if let Some(id) = self.finished_tasks.pop_front() {
             if self.tasks.remove(&id).is_none() {
@@ -205,12 +189,12 @@ impl Scheduler {
 
         // Get information about the current task.
         let (current_id, current_stack_pointer, current_prio, current_status) = {
-            let mut borrowed = self.current_task.borrow_mut();
+            let mut locked = self.current_task.lock();
             (
-                borrowed.id,
-                &mut borrowed.last_stack_pointer as *mut usize,
-                borrowed.prio,
-                borrowed.status,
+                locked.id,
+                &mut locked.last_stack_pointer as *mut usize,
+                locked.prio,
+                locked.status,
             )
         };
 
@@ -234,17 +218,17 @@ impl Scheduler {
 
         if let Some(new_task) = next_task {
             let (new_id, new_stack_pointer) = {
-                let mut borrowed = new_task.borrow_mut();
-                borrowed.status = TaskStatus::Running;
-                (borrowed.id, borrowed.last_stack_pointer)
+                let mut locked = new_task.lock();
+                locked.status = TaskStatus::Running;
+                (locked.id, locked.last_stack_pointer)
             };
 
             if current_status == TaskStatus::Running {
-                self.current_task.borrow_mut().status = TaskStatus::Ready;
+                self.current_task.lock().status = TaskStatus::Ready;
                 self.ready_queue.push(self.current_task.clone());
             } else if current_status == TaskStatus::Finished {
                 serial_println!("Task {} finished", current_id);
-                self.current_task.borrow_mut().status = TaskStatus::Invalid;
+                self.current_task.lock().status = TaskStatus::Invalid;
                 // release the task later, because the stack is required
                 // to call the function "switch"
                 // => push id to a queue and release the task later
@@ -261,35 +245,24 @@ impl Scheduler {
 
             self.current_task = new_task;
 
-            let new_cr3 = if let Some(ref space) = self.current_task.borrow().address_space {
+            let new_cr3 = if let Some(ref space) = self.current_task.lock().address_space {
                 space.page_table_frame
             } else {
                 self.kernel_page_table
             };
 
-            unsafe {
-                let (_, flags) = Cr3::read();
-                Cr3::write(new_cr3, flags);
-            }
-
-            unsafe {
-                switch(current_stack_pointer, new_stack_pointer);
-            }
+            return Some((current_stack_pointer, new_stack_pointer, new_cr3));
         }
-    }
 
-    pub fn reschedule(&mut self) {
-        irqsave(|| self.schedule());
+        None
     }
 }
 
-pub(crate) static mut SCHEDULER: Option<Scheduler> = None;
+pub(crate) static SCHEDULER: Spinlock<Option<Scheduler>> = Spinlock::new(None);
 
 /// Initialize module, must be called once, and only once
 pub fn init() {
-    unsafe {
-        SCHEDULER = Some(Scheduler::new());
-    }
+    *SCHEDULER.lock() = Some(Scheduler::new());
 
     serial_println!("Scheduler initialized");
 
@@ -300,44 +273,91 @@ pub fn init() {
 
 /// Create a new kernel task
 pub fn spawn(func: extern "C" fn(), prio: TaskPriority) -> Result<TaskId> {
-    unsafe { SCHEDULER.as_mut().unwrap().spawn(func, prio) }
+    SCHEDULER.lock().as_mut().unwrap().spawn(func, prio)
 }
 
-/// Trigger the scheduler to switch to the next available task
-pub fn reschedule() {
-    unsafe { SCHEDULER.as_mut().unwrap().reschedule() }
+/// Create a new process task
+pub fn spawn_process(
+    func: extern "C" fn(),
+    prio: TaskPriority,
+    address_space: ProcessAddressSpace,
+) -> Result<TaskId> {
+    SCHEDULER
+        .lock()
+        .as_mut()
+        .unwrap()
+        .spawn_process(func, prio, address_space)
 }
 
 /// Timer interrupt  call scheduler to switch to the next available task
-pub(crate) fn schedule() {
-    unsafe { SCHEDULER.as_mut().unwrap().schedule() }
+pub fn schedule() {
+    irqsave(|| {
+        let switch_info = {
+            let mut guard = SCHEDULER.lock();
+            if let Some(scheduler) = guard.as_mut() {
+                scheduler.schedule()
+            } else {
+                None
+            }
+        };
+
+        if let Some((old_sp, new_sp, new_cr3)) = switch_info {
+            unsafe {
+                let (_, flags) = Cr3::read();
+                Cr3::write(new_cr3, flags);
+                switch(old_sp, new_sp);
+            }
+        }
+    });
 }
 
 /// Terminate the current running task
 pub fn do_exit() -> ! {
-    unsafe {
-        SCHEDULER.as_mut().unwrap().exit();
-    }
+    irqsave(|| {
+        let mut guard = SCHEDULER.lock();
+        if let Some(scheduler) = guard.as_mut() {
+            scheduler.exit();
+        }
+    });
+
+    schedule();
+
+    loop {}
 }
 
 /// Terminate the current running task
 pub fn abort() -> ! {
-    unsafe { SCHEDULER.as_mut().unwrap().abort() }
+    irqsave(|| {
+        let mut guard = SCHEDULER.lock();
+        if let Some(scheduler) = guard.as_mut() {
+            scheduler.abort();
+        }
+    });
+
+    schedule();
+
+    loop {}
 }
 
 pub(crate) fn get_current_interrupt_stack() -> VirtAddr {
-    unsafe { SCHEDULER.as_mut().unwrap().get_current_interrupt_stack() }
+    SCHEDULER
+        .lock()
+        .as_mut()
+        .unwrap()
+        .get_current_interrupt_stack()
 }
 
-pub(crate) fn block_current_task() -> Rc<RefCell<Task>> {
-    unsafe { SCHEDULER.as_mut().unwrap().block_current_task() }
+#[allow(dead_code)]
+pub(crate) fn block_current_task() -> Arc<Spinlock<Task>> {
+    SCHEDULER.lock().as_mut().unwrap().block_current_task()
 }
 
-pub(crate) fn wakeup_task(task: Rc<RefCell<Task>>) {
-    unsafe { SCHEDULER.as_mut().unwrap().wakeup_task(task) }
+#[allow(dead_code)]
+pub(crate) fn wakeup_task(task: Arc<Spinlock<Task>>) {
+    SCHEDULER.lock().as_mut().unwrap().wakeup_task(task)
 }
 
 /// Get the TaskID of the current running task
 pub fn get_current_taskid() -> TaskId {
-    unsafe { SCHEDULER.as_ref().unwrap().get_current_taskid() }
+    SCHEDULER.lock().as_ref().unwrap().get_current_taskid()
 }

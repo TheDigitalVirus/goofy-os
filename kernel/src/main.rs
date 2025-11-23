@@ -105,10 +105,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         };
     };
 
-    unsafe {
-        memory::enable_user_memory_access(phys_mem_offset);
-    }
-
     #[cfg(processes_enabled)]
     {
         serial_println!("Init scheduler...");

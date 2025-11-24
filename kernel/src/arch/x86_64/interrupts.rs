@@ -1,5 +1,5 @@
 #[cfg(uefi)]
-use crate::apic;
+use crate::arch::x86_64::apic; // TODO: Auto import correct arch
 use crate::{hlt_loop, println, serial_println};
 use core::u64;
 

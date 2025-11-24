@@ -34,23 +34,23 @@ use x86_64::registers::{
 
 extern crate alloc;
 
-pub mod allocator;
-pub mod apic;
+pub mod arch;
 pub mod desktop;
+pub mod drivers;
 pub mod errno;
 pub mod exit;
-pub mod framebuffer;
 pub mod fs;
-pub mod gdt;
 pub mod init;
-pub mod interrupts;
-pub mod irq;
-pub mod memory;
-pub mod serial;
+pub mod mm;
 pub mod surface;
 pub mod sysinfo;
 pub mod time;
 pub mod user_program_loader;
+
+// Re-export for compatibility
+pub use arch::x86_64::{gdt, interrupts, irq}; // TODO: Auto import correct arch
+pub use drivers::{framebuffer, serial};
+pub use mm::{allocator, memory};
 
 #[cfg(processes_enabled)]
 pub mod syscalls;

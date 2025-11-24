@@ -12,7 +12,7 @@ use core::ops::Deref;
 use x86_64::VirtAddr;
 
 #[cfg(uefi)]
-use crate::apic;
+use crate::arch::x86_64::apic; // TODO: Auto import correct arch
 
 pub const HEAP_START: u64 = 0x_4444_4444_0000;
 pub const HEAP_SIZE: u64 = 100 * 1024; // 100 KiB

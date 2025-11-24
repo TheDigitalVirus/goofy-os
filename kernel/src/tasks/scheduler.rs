@@ -62,30 +62,41 @@ impl Scheduler {
         }
     }
 
+    fn spawn_inner(
+        &mut self,
+        func: extern "C" fn(),
+        prio: TaskPriority,
+        address_space: Option<ProcessAddressSpace>,
+    ) -> Result<TaskId> {
+        let prio_number: usize = prio.into().into();
+
+        if prio_number >= NO_PRIORITIES {
+            return Err(Error::BadPriority);
+        }
+
+        // Create the new task.
+        let tid = self.get_tid();
+        let mut task = Task::new(tid, TaskStatus::Ready, prio);
+
+        if let Some(space) = address_space {
+            task.address_space = Some(space);
+        }
+
+        task.create_stack_frame(func);
+
+        let task = Arc::new(Spinlock::new(task));
+
+        // Add it to the task lists.
+        self.ready_queue.push(task.clone());
+        self.tasks.insert(tid, task);
+
+        serial_println!("Creating task {}", tid);
+
+        Ok(tid)
+    }
+
     pub fn spawn(&mut self, func: extern "C" fn(), prio: TaskPriority) -> Result<TaskId> {
-        let closure = || {
-            let prio_number: usize = prio.into().into();
-
-            if prio_number >= NO_PRIORITIES {
-                return Err(Error::BadPriority);
-            }
-
-            // Create the new task.
-            let tid = self.get_tid();
-            let task = Arc::new(Spinlock::new(Task::new(tid, TaskStatus::Ready, prio)));
-
-            task.lock().create_stack_frame(func);
-
-            // Add it to the task lists.
-            self.ready_queue.push(task.clone());
-            self.tasks.insert(tid, task);
-
-            serial_println!("Creating task {}", tid);
-
-            Ok(tid)
-        };
-
-        irqsave(closure)
+        irqsave(|| self.spawn_inner(func, prio, None))
     }
 
     pub fn spawn_process(
@@ -94,30 +105,7 @@ impl Scheduler {
         prio: TaskPriority,
         address_space: ProcessAddressSpace,
     ) -> Result<TaskId> {
-        let closure = || {
-            let prio_number: usize = prio.into().into();
-
-            if prio_number >= NO_PRIORITIES {
-                return Err(Error::BadPriority);
-            }
-
-            // Create the new task.
-            let tid = self.get_tid();
-            let task = Arc::new(Spinlock::new(Task::new(tid, TaskStatus::Ready, prio)));
-
-            task.lock().address_space = Some(address_space);
-            task.lock().create_stack_frame(func);
-
-            // Add it to the task lists.
-            self.ready_queue.push(task.clone());
-            self.tasks.insert(tid, task);
-
-            serial_println!("Creating process task {}", tid);
-
-            Ok(tid)
-        };
-
-        irqsave(closure)
+        irqsave(|| self.spawn_inner(func, prio, Some(address_space)))
     }
 
     pub fn exit(&mut self) {

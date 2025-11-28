@@ -15,6 +15,7 @@ fn main() {
     let mut cmd = std::process::Command::new("qemu-system-x86_64");
     cmd.arg("-m").arg("256M");
     cmd.arg("-serial").arg("stdio");
+    cmd.arg("-display").arg("sdl"); // sdl handles scaled display a lot better
     cmd.arg("-s");
     cmd.arg("-monitor").arg("tcp:127.0.0.1:4321,server,nowait");
     if uefi {

@@ -1,3 +1,5 @@
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use crate::{
     desktop::{
         input::{
@@ -5,8 +7,7 @@ use crate::{
             init_queues,
         },
         window_manager::{
-            WindowManager, generate_icon_for_app_str, launch_calculator, launch_filemanager,
-            launch_notepad, launch_sysinfo, launch_tictactoe,
+            WindowManager, generate_icon_for_app_str, launch_calculator, launch_filemanager, launch_notepad, launch_sysinfo, launch_terminal, launch_tictactoe
         },
     },
     framebuffer::{self, Color, FrameBufferWriter, SCREEN_SIZE},
@@ -122,18 +123,18 @@ pub fn run_desktop() -> ! {
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 0,
-            y: screen_size.1 as usize - 300 - TASKBAR_HEIGHT - 2,
+            y: screen_size.1 as usize - 265 - TASKBAR_HEIGHT - 2,
             width: 201,
-            height: 302,
+            height: 267,
             color: Color::BLACK,
             filled: false,
             hide: true,
         }),
         desktop.add_shape(Shape::Rectangle {
             x: 0,
-            y: screen_size.1 as usize - 300 - TASKBAR_HEIGHT - 1,
+            y: screen_size.1 as usize - 265 - TASKBAR_HEIGHT - 1,
             width: 200,
-            height: 300,
+            height: 265,
             color: TASKBAR_COLOR,
             filled: true,
             hide: true,
@@ -150,7 +151,7 @@ pub fn run_desktop() -> ! {
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 10,
-            y: screen_size.1 as usize - 305,
+            y: screen_size.1 as usize - 275,
             width: 180,
             height: 1,
             color: Color::BLACK,
@@ -159,7 +160,7 @@ pub fn run_desktop() -> ! {
         }),
         desktop.add_shape(Shape::Text {
             x: 40,
-            y: screen_size.1 as usize - 335,
+            y: screen_size.1 as usize - 305,
             content: "Calculator".to_string(),
             color: Color::BLACK,
             background_color: TASKBAR_COLOR,
@@ -169,24 +170,24 @@ pub fn run_desktop() -> ! {
         }),
         desktop.add_shape(Shape::RawImage {
             x: 15,
-            y: screen_size.1 as usize - 335,
+            y: screen_size.1 as usize - 305,
             width: 16,
             height: 16,
             data: generate_icon_for_app_str::<16, 16>("calculator"),
             hide: true,
         }),
-        0,
-        screen_size.1 as usize - 350,
-        200,
-        45,
+        0, // x
+        screen_size.1 as usize - 315, // y - área de clique mais alta
+        200, // width
+        45, // height
         "Calculator",
     ));
 
-    // Notepad start button
+    // Notepad start button - AJUSTAR COORDENADAS DE CLIQUE
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 10,
-            y: screen_size.1 as usize - 260,
+            y: screen_size.1 as usize - 230,
             width: 180,
             height: 1,
             color: Color::BLACK,
@@ -195,7 +196,7 @@ pub fn run_desktop() -> ! {
         }),
         desktop.add_shape(Shape::Text {
             x: 40,
-            y: screen_size.1 as usize - 290,
+            y: screen_size.1 as usize - 260,
             content: "Notepad".to_string(),
             color: Color::BLACK,
             background_color: TASKBAR_COLOR,
@@ -205,24 +206,24 @@ pub fn run_desktop() -> ! {
         }),
         desktop.add_shape(Shape::RawImage {
             x: 15,
-            y: screen_size.1 as usize - 290,
+            y: screen_size.1 as usize - 260,
             width: 16,
             height: 16,
             data: generate_icon_for_app_str::<16, 16>("notepad"),
             hide: true,
         }),
-        0,
-        screen_size.1 as usize - 305,
-        200,
-        45,
+        0, // x
+        screen_size.1 as usize - 270, // y - área de clique mais alta
+        200, // width
+        45, // height
         "Notepad",
     ));
 
-    // File Manager start button
+    // File Manager start button - AJUSTAR COORDENADAS DE CLIQUE
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 10,
-            y: screen_size.1 as usize - 215,
+            y: screen_size.1 as usize - 185,
             width: 180,
             height: 1,
             color: Color::BLACK,
@@ -231,7 +232,7 @@ pub fn run_desktop() -> ! {
         }),
         desktop.add_shape(Shape::Text {
             x: 40,
-            y: screen_size.1 as usize - 245,
+            y: screen_size.1 as usize - 215,
             content: "File Manager".to_string(),
             color: Color::BLACK,
             background_color: TASKBAR_COLOR,
@@ -241,24 +242,24 @@ pub fn run_desktop() -> ! {
         }),
         desktop.add_shape(Shape::RawImage {
             x: 15,
-            y: screen_size.1 as usize - 245,
+            y: screen_size.1 as usize - 215,
             width: 16,
             height: 16,
             data: generate_icon_for_app_str::<16, 16>("filemanager"),
             hide: true,
         }),
-        0,
-        screen_size.1 as usize - 260,
-        200,
-        45,
+        0, // x
+        screen_size.1 as usize - 225, // y - área de clique mais alta
+        200, // width
+        45, // height
         "File Manager",
     ));
 
-    // SysInfo start button
+    // SysInfo start button - AJUSTAR COORDENADAS DE CLIQUE
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 10,
-            y: screen_size.1 as usize - 170,
+            y: screen_size.1 as usize - 140,
             width: 180,
             height: 1,
             color: Color::BLACK,
@@ -267,7 +268,7 @@ pub fn run_desktop() -> ! {
         }),
         desktop.add_shape(Shape::Text {
             x: 40,
-            y: screen_size.1 as usize - 200,
+            y: screen_size.1 as usize - 170,
             content: "System Info".to_string(),
             color: Color::BLACK,
             background_color: TASKBAR_COLOR,
@@ -277,24 +278,24 @@ pub fn run_desktop() -> ! {
         }),
         desktop.add_shape(Shape::RawImage {
             x: 15,
-            y: screen_size.1 as usize - 200,
+            y: screen_size.1 as usize - 170,
             width: 16,
             height: 16,
             data: generate_icon_for_app_str::<16, 16>("sysinfo"),
             hide: true,
         }),
-        0,
-        screen_size.1 as usize - 215,
-        200,
-        45,
+        0, // x
+        screen_size.1 as usize - 180, // y - área de clique mais alta
+        200, // width
+        45, // height
         "System Info",
     ));
 
-    // TicTacToe start button
+    // TicTacToe start button - AJUSTAR COORDENADAS DE CLIQUE
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 10,
-            y: screen_size.1 as usize - 125,
+            y: screen_size.1 as usize - 95,
             width: 180,
             height: 1,
             color: Color::BLACK,
@@ -303,7 +304,7 @@ pub fn run_desktop() -> ! {
         }),
         desktop.add_shape(Shape::Text {
             x: 40,
-            y: screen_size.1 as usize - 155,
+            y: screen_size.1 as usize - 125,
             content: "Tic-Tac-Toe".to_string(),
             color: Color::BLACK,
             background_color: TASKBAR_COLOR,
@@ -313,17 +314,53 @@ pub fn run_desktop() -> ! {
         }),
         desktop.add_shape(Shape::RawImage {
             x: 15,
-            y: screen_size.1 as usize - 155,
+            y: screen_size.1 as usize - 125,
             width: 16,
             height: 16,
             data: generate_icon_for_app_str::<16, 16>("tictactoe"),
             hide: true,
         }),
-        0,
-        screen_size.1 as usize - 170,
-        200,
-        45,
+        0, // x
+        screen_size.1 as usize - 135, // y - área de clique mais alta
+        200, // width
+        45, // height
         "Tic-Tac-Toe",
+    ));
+
+    // Terminal start button - AJUSTAR COORDENADAS DE CLIQUE
+    start_menu_entries.push((
+        desktop.add_shape(Shape::Rectangle {
+            x: 10,
+            y: screen_size.1 as usize - 50,
+            width: 0,
+            height: 0,
+            color: Color::BLACK,
+            filled: true,
+            hide: true,
+        }),
+        desktop.add_shape(Shape::Text {
+            x: 40,
+            y: screen_size.1 as usize - 80,
+            content: "Terminal".to_string(),
+            color: Color::BLACK,
+            background_color: TASKBAR_COLOR,
+            font_size: RasterHeight::Size20,
+            font_weight: FontWeight::Regular,
+            hide: true,
+        }),
+        desktop.add_shape(Shape::RawImage {
+            x: 15,
+            y: screen_size.1 as usize - 80,
+            width: 16,
+            height: 16,
+            data: generate_icon_for_app_str::<16, 16>("terminal"),
+            hide: true,
+        }),
+        0, // x
+        screen_size.1 as usize - 90, // y - área de clique mais alta
+        200, // width
+        45, // height
+        "Terminal",
     ));
 
     // Time and date background
@@ -363,40 +400,44 @@ pub fn run_desktop() -> ! {
 
     serial_println!("Screen size: {}x{}", screen_size.0, screen_size.1);
 
-    let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Azerty, HandleControl::Ignore);
+    let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Uk105Key, HandleControl::MapLettersToUnicode);
 
     let time_update_ticks = 60 * 5; // FPS is somewhere between 60 and 50 (hard to test)
     let mut ticks = 0u64;
 
-    let mut ctrl_pressed = false;
-    let mut shift_pressed = false;
-    let mut alt_pressed = false;
+    pub static ALT: AtomicBool = AtomicBool::new(false);
+    pub static CTRL: AtomicBool = AtomicBool::new(false);
+    pub static SHIFT: AtomicBool = AtomicBool::new(false);
 
     loop {
         for _ in 0..10000 {
             // Poll for scancodes
             if let Some(scancode) = scancode_queue.pop() {
                 if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
+                    let ord = Ordering::Relaxed;
                     match key_event.code {
                         KeyCode::LControl | KeyCode::RControl => {
-                            ctrl_pressed = key_event.state == KeyState::Down;
+                            CTRL.store(key_event.state == KeyState::Down, ord);
                         }
                         KeyCode::LShift | KeyCode::RShift => {
-                            shift_pressed = key_event.state == KeyState::Down;
+                            SHIFT.store(key_event.state == KeyState::Down,ord);
                         }
                         KeyCode::LAlt => {
-                            alt_pressed = key_event.state == KeyState::Down;
+                            ALT.store(key_event.state == KeyState::Down,ord);
                         }
                         _ => {}
                     }
+                    let is_alt = ALT.load(ord);
+                    let is_ctrl = CTRL.load(ord);
+                    let is_shift = SHIFT.load(ord);
                     if let Some(key) = keyboard.process_keyevent(key_event) {
                         match key {
                             DecodedKey::Unicode(character) => {
                                 window_manager.handle_char_input(
                                     character,
-                                    ctrl_pressed,
-                                    alt_pressed,
-                                    shift_pressed,
+                                    is_alt,
+                                    is_ctrl,
+                                    is_shift,
                                 );
                             }
                             DecodedKey::RawKey(key) => {
@@ -569,6 +610,19 @@ pub fn run_desktop() -> ! {
                         }
                         if *label == "Notepad" {
                             launch_notepad(&mut window_manager);
+
+                            start_menu_open = false;
+                            for (idx, label_idx, icon_idx, _, _, _, _, _) in &start_menu_entries {
+                                desktop.hide_shape(*idx);
+                                desktop.hide_shape(*label_idx);
+                                desktop.hide_shape(*icon_idx);
+                            }
+
+                            handled = true;
+                            break;
+                        }
+                        if *label == "Terminal" {
+                            launch_terminal(&mut window_manager);
 
                             start_menu_open = false;
                             for (idx, label_idx, icon_idx, _, _, _, _, _) in &start_menu_entries {

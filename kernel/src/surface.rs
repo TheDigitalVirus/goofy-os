@@ -577,6 +577,16 @@ impl Surface {
         }
     }
 
+    pub fn update_shape_visibility(&mut self, shape_id: usize, visible: bool) -> bool {
+        if let Some(shape) = self.shapes.get_mut(shape_id) {
+            let dirty_region = shape.set_visibility(visible);
+            self.mark_region_dirty(dirty_region);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn remove_shape(&mut self, shape_id: usize) -> bool {
         if shape_id < self.shapes.len() {
             let bounds = self.shapes[shape_id].get_bounds();

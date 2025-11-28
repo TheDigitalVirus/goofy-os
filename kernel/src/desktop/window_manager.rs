@@ -1,4 +1,5 @@
 use crate::desktop::application::Application;
+use crate::desktop::terminal::Terminal;
 use alloc::vec;
 use alloc::{
     string::{String, ToString},
@@ -28,6 +29,7 @@ pub enum AppType {
     Calculator(Calculator),
     FileManager(FileManager),
     Notepad(Notepad),
+    Terminal(Terminal),
     SysInfo(SysInfo),
     TicTacToe(TicTacToe),
 }
@@ -38,6 +40,7 @@ impl Application for AppType {
             AppType::Calculator(calculator) => calculator.init(surface),
             AppType::FileManager(filemanager) => filemanager.setup_ui(surface),
             AppType::Notepad(notepad) => notepad.init(surface),
+            AppType::Terminal(terminal) => terminal.init(surface),
             AppType::SysInfo(sysinfo) => sysinfo.init(surface),
             AppType::TicTacToe(tictactoe) => tictactoe.init(surface),
         }
@@ -48,6 +51,7 @@ impl Application for AppType {
             AppType::Calculator(calculator) => calculator.render(surface),
             AppType::FileManager(filemanager) => filemanager.render(surface),
             AppType::Notepad(notepad) => notepad.render(surface),
+            AppType::Terminal(terminal) => terminal.render(surface),
             AppType::SysInfo(sysinfo) => sysinfo.render(surface),
             AppType::TicTacToe(tictactoe) => tictactoe.render(surface),
         }
@@ -62,6 +66,7 @@ impl Application for AppType {
                 filemanager.handle_char_input(c, ctrl_pressed, surface)
             }
             AppType::Notepad(notepad) => notepad.handle_char_input(c, ctrl_pressed, surface),
+            AppType::Terminal(terminal) => terminal.handle_char_input(c, ctrl_pressed, surface),
             AppType::SysInfo(sysinfo) => sysinfo.handle_char_input(c, ctrl_pressed, surface),
             AppType::TicTacToe(tictactoe) => tictactoe.handle_char_input(c, ctrl_pressed, surface),
         }
@@ -72,6 +77,7 @@ impl Application for AppType {
             AppType::Calculator(calculator) => calculator.handle_key_input(key, surface),
             AppType::FileManager(filemanager) => filemanager.handle_key_input(key, surface),
             AppType::Notepad(notepad) => notepad.handle_key_input(key, surface),
+            AppType::Terminal(terminal) => terminal.handle_key_input(key, surface),
             AppType::SysInfo(sysinfo) => sysinfo.handle_key_input(key, surface),
             AppType::TicTacToe(tictactoe) => tictactoe.handle_key_input(key, surface),
         }
@@ -82,6 +88,7 @@ impl Application for AppType {
             AppType::Calculator(calculator) => calculator.handle_mouse_click(x, y, surface),
             AppType::FileManager(filemanager) => filemanager.handle_mouse_click(x, y, surface),
             AppType::Notepad(notepad) => notepad.handle_mouse_click(x, y, surface),
+            AppType::Terminal(terminal) => terminal.handle_mouse_click(x, y, surface),
             AppType::SysInfo(sysinfo) => sysinfo.handle_mouse_click(x, y, surface),
             AppType::TicTacToe(tictactoe) => tictactoe.handle_mouse_click(x, y, surface),
         }
@@ -92,6 +99,7 @@ impl Application for AppType {
             AppType::Calculator(calculator) => calculator.get_title(),
             AppType::FileManager(filemanager) => filemanager.get_title(),
             AppType::Notepad(notepad) => notepad.get_title(),
+            AppType::Terminal(terminal) => terminal.get_title(),
             AppType::SysInfo(sysinfo) => sysinfo.get_title(),
             AppType::TicTacToe(tictactoe) => tictactoe.get_title(),
         }
@@ -129,6 +137,7 @@ impl Window {
             AppType::Calculator(_) => Color::GRAY,
             AppType::FileManager(_) => Color::new(240, 240, 240),
             AppType::Notepad(_) => Color::WHITE,
+            AppType::Terminal(_) => Color::BLACK,
             AppType::SysInfo(_) => Color::DARKGRAY,
             AppType::TicTacToe(_) => Color::new(250, 250, 250),
         };
@@ -138,6 +147,7 @@ impl Window {
             AppType::Calculator(_) => "calculator",
             AppType::FileManager(_) => "filemanager",
             AppType::Notepad(_) => "notepad",
+            AppType::Terminal(_) => "terminal",
             AppType::SysInfo(_) => "sysinfo",
             AppType::TicTacToe(_) => "tictactoe",
         });
@@ -705,6 +715,7 @@ impl WindowManager {
 const ICON_CALCULATOR: &[u8] = include_bytes!("../../../icons/calculator.bmp");
 const ICON_FILEMANAGER: &[u8] = include_bytes!("../../../icons/filemanager.bmp");
 const ICON_NOTEPAD: &[u8] = include_bytes!("../../../icons/notepad.bmp");
+const ICON_TERMINAL: &[u8] = include_bytes!("../../../icons/terminal.bmp");
 const ICON_SYSINFO: &[u8] = include_bytes!("../../../icons/sysinfo.bmp");
 const ICON_TICTACTOE: &[u8] = include_bytes!("../../../icons/tictactoe.bmp");
 const START_ICON: &[u8] = include_bytes!("../../../icons/start.bmp");
@@ -780,11 +791,25 @@ pub fn launch_tictactoe(window_manager: &mut WindowManager) {
         AppType::TicTacToe(TicTacToe::new(None)),
     ));
 }
+
+pub fn launch_terminal(window_manager: &mut WindowManager) {
+    window_manager.add_window(Window::new(
+        100,
+        100,
+        600,
+        435,
+        0, // Will be overridden by add_window
+        "Terminal".to_string(),
+        AppType::Terminal(Terminal::new(None)),
+    ));
+}
+
 pub fn generate_icon_for_app_str<const W: usize, const H: usize>(app: &str) -> Vec<Color> {
     let data = match app {
         "calculator" => ICON_CALCULATOR.to_vec(),
         "filemanager" => ICON_FILEMANAGER.to_vec(),
         "notepad" => ICON_NOTEPAD.to_vec(),
+        "terminal" => ICON_TERMINAL.to_vec(),
         "sysinfo" => ICON_SYSINFO.to_vec(),
         "tictactoe" => ICON_TICTACTOE.to_vec(),
         "start_icon" => START_ICON.to_vec(),

@@ -7,11 +7,8 @@ use alloc::vec;
 use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
 use pc_keyboard::KeyCode;
 use crate::{
-    desktop::application::Application, 
-    framebuffer::Color, 
-    fs::manager::list_directory, 
-    surface::{Shape, Surface}, 
-    time::{get_ms_since_epoch, get_utc_time}
+    desktop::{application::Application, keyboard::{get_current_layout, set_keyboard_layout}}, framebuffer::Color, fs::manager::list_directory, surface::{Shape, Surface}, time::{get_ms_since_epoch, get_utc_time}
+    
 };
 
 #[derive(Clone, PartialEq)]
@@ -55,8 +52,12 @@ pub struct Terminal {
     content_changed: bool,
 }
 
-// Comandos estáticos para lookup O(1)
-static COMMANDS: &[&str] = &["help", "clear", "echo", "ls", "cat", "date", "time", "uptime", "version"];
+// Comandos estáticos para lookup O(1) - ADICIONADO NOVO COMANDO
+static COMMANDS: &[&str] = &[
+    "help", "clear", "echo", "ls", "cat", "date", "time", 
+    "uptime", "version", "setkeyboard" // Novo comando
+];
+
 
 // Constantes para evitar magic numbers
 const COMMAND_HISTORY_CAPACITY: usize = 50;
@@ -150,15 +151,17 @@ impl Terminal {
         match first_part {
             "help" => vec![
                 "Available commands:".into(),
-                "  help    - Show this help".into(),
-                "  clear   - Clear terminal".into(),
-                "  echo    - Print arguments".into(),
-                "  ls      - List files".into(),
-                "  cat     - Show file contents".into(),
-                "  date    - Show current date/time".into(),
-                "  time    - Show current time".into(),
-                "  uptime  - Show system uptime".into(),
-                "  version - Show OS version".into(),
+                "  help        - Show this help".into(),
+                "  clear       - Clear terminal".into(),
+                "  echo        - Print arguments".into(),
+                "  ls          - List files".into(),
+                "  cat         - Show file contents".into(),
+                "  date        - Show current date/time".into(),
+                "  time        - Show current time".into(),
+                "  uptime      - Show system uptime".into(),
+                "  version     - Show OS version".into(),
+                "  setkeyboard - Change keyboard layout".into(),
+                "".into(),
             ],
             "clear" => {
                 self.output_lines.clear();
@@ -204,7 +207,27 @@ impl Terminal {
                 vec![format!("Uptime: {:02}:{:02}:{:02}", hours, minutes, seconds)]
             }
             "version" => vec!["GoofyOS v0.1.0 - Built with Rust".into()],
+            "setkeyboard" => self.set_keyboard_command(parts.next()), // Novo comando
             _ => vec![format!("Command not found: {}", cmd)],
+        }
+    }
+
+    // No comando setkeyboard do terminal:
+    fn set_keyboard_command(&mut self, layout: Option<&str>) -> Vec<String> {
+        match layout {
+            Some(layout_name) => {
+                if set_keyboard_layout(&layout_name) {
+                    vec![format!("Keyboard layout changed to: {}", layout_name)]
+                } else {
+                    vec![format!("Failed to change keyboard layout to: {}", layout_name)]
+                }
+            }
+            None => {
+                vec![
+                    format!("Current keyboard layout: {:?}", get_current_layout()),
+                    "Usage: setkeyboard <layout>".into(),
+                ]
+            }
         }
     }
 

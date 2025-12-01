@@ -1,14 +1,15 @@
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::Ordering;
 
 use crate::{
     desktop::{
         input::{
             CLICK_QUEUE, CurrentMouseState, FILE_OPEN_QUEUE, SCANCODE_QUEUE, STATE_QUEUE,
             init_queues,
-        },
-        window_manager::{
-            WindowManager, generate_icon_for_app_str, launch_calculator, launch_filemanager, launch_notepad, launch_sysinfo, launch_terminal, launch_tictactoe
-        },
+        }, keyboard::{ALT, CTRL, CURRENT_LAYOUT, SHIFT, create_keyboard, cycle_keyboard_layout, get_current_layout}, window_manager::{
+            WindowManager, generate_icon_for_app_str, launch_calculator, 
+            launch_filemanager, launch_notepad, launch_sysinfo, 
+            launch_terminal, launch_tictactoe
+        }
     },
     framebuffer::{self, Color, FrameBufferWriter, SCREEN_SIZE},
     serial_println,
@@ -18,7 +19,7 @@ use crate::{
 use alloc::string::String;
 use alloc::{format, string::ToString, vec::Vec};
 use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
-use pc_keyboard::{DecodedKey, HandleControl, KeyCode, KeyState, Keyboard, ScancodeSet1, layouts};
+use pc_keyboard::{DecodedKey, KeyCode, KeyState};
 
 use x86_64::instructions::interrupts::without_interrupts;
 
@@ -59,7 +60,6 @@ pub fn run_desktop() -> ! {
     );
 
     // Taskbar
-    // Rerender performance trick:
     const TASKBAR_CHUNK_AMOUNT: usize = 8;
     for i in 0..TASKBAR_CHUNK_AMOUNT {
         desktop.add_shape(Shape::Rectangle {
@@ -114,10 +114,10 @@ pub fn run_desktop() -> ! {
     });
 
     let mut start_menu_entries: Vec<(usize, usize, usize, usize, usize, usize, usize, &str)> =
-        Vec::new(); // (idx, label idx, icon idx, x, y, width, height, label)
+        Vec::new();
     let mut start_menu_open = false;
-    let mut taskbar_window_shapes: Vec<(usize, usize, usize, usize)> = Vec::new(); // (background_idx, text_idx, icon_idx, window_id)
-    let mut prev_windows_state: Vec<(usize, String, bool)> = Vec::new(); // Track previous window state for change detection
+    let mut taskbar_window_shapes: Vec<(usize, usize, usize, usize)> = Vec::new();
+    let mut prev_windows_state: Vec<(usize, String, bool)> = Vec::new();
 
     // Start menu placeholder
     start_menu_entries.push((
@@ -176,14 +176,14 @@ pub fn run_desktop() -> ! {
             data: generate_icon_for_app_str::<16, 16>("calculator"),
             hide: true,
         }),
-        0, // x
-        screen_size.1 as usize - 315, // y - área de clique mais alta
-        200, // width
-        45, // height
+        0,
+        screen_size.1 as usize - 315,
+        200,
+        45,
         "Calculator",
     ));
 
-    // Notepad start button - AJUSTAR COORDENADAS DE CLIQUE
+    // Notepad start button
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 10,
@@ -212,14 +212,14 @@ pub fn run_desktop() -> ! {
             data: generate_icon_for_app_str::<16, 16>("notepad"),
             hide: true,
         }),
-        0, // x
-        screen_size.1 as usize - 270, // y - área de clique mais alta
-        200, // width
-        45, // height
+        0,
+        screen_size.1 as usize - 270,
+        200,
+        45,
         "Notepad",
     ));
 
-    // File Manager start button - AJUSTAR COORDENADAS DE CLIQUE
+    // File Manager start button
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 10,
@@ -248,14 +248,14 @@ pub fn run_desktop() -> ! {
             data: generate_icon_for_app_str::<16, 16>("filemanager"),
             hide: true,
         }),
-        0, // x
-        screen_size.1 as usize - 225, // y - área de clique mais alta
-        200, // width
-        45, // height
+        0,
+        screen_size.1 as usize - 225,
+        200,
+        45,
         "File Manager",
     ));
 
-    // SysInfo start button - AJUSTAR COORDENADAS DE CLIQUE
+    // SysInfo start button
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 10,
@@ -284,14 +284,14 @@ pub fn run_desktop() -> ! {
             data: generate_icon_for_app_str::<16, 16>("sysinfo"),
             hide: true,
         }),
-        0, // x
-        screen_size.1 as usize - 180, // y - área de clique mais alta
-        200, // width
-        45, // height
+        0,
+        screen_size.1 as usize - 180,
+        200,
+        45,
         "System Info",
     ));
 
-    // TicTacToe start button - AJUSTAR COORDENADAS DE CLIQUE
+    // TicTacToe start button
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 10,
@@ -320,14 +320,14 @@ pub fn run_desktop() -> ! {
             data: generate_icon_for_app_str::<16, 16>("tictactoe"),
             hide: true,
         }),
-        0, // x
-        screen_size.1 as usize - 135, // y - área de clique mais alta
-        200, // width
-        45, // height
+        0,
+        screen_size.1 as usize - 135,
+        200,
+        45,
         "Tic-Tac-Toe",
     ));
 
-    // Terminal start button - AJUSTAR COORDENADAS DE CLIQUE
+    // Terminal start button
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 10,
@@ -356,10 +356,10 @@ pub fn run_desktop() -> ! {
             data: generate_icon_for_app_str::<16, 16>("terminal"),
             hide: true,
         }),
-        0, // x
-        screen_size.1 as usize - 90, // y - área de clique mais alta
-        200, // width
-        45, // height
+        0,
+        screen_size.1 as usize - 90,
+        200,
+        45,
         "Terminal",
     ));
 
@@ -399,49 +399,67 @@ pub fn run_desktop() -> ! {
     });
 
     serial_println!("Screen size: {}x{}", screen_size.0, screen_size.1);
+    
+    // Inicializa teclado com layout atual
+    let mut keyboard = create_keyboard(CURRENT_LAYOUT.load(Ordering::Relaxed));
+    serial_println!("Current keyboard layout: {}", get_current_layout());
+    
+    // Rastreia layout anterior para detectar mudanças
+    let mut last_layout = CURRENT_LAYOUT.load(Ordering::Relaxed);
 
-    let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Uk105Key, HandleControl::MapLettersToUnicode);
-
-    let time_update_ticks = 60 * 5; // FPS is somewhere between 60 and 50 (hard to test)
+    let time_update_ticks = 60 * 5;
     let mut ticks = 0u64;
 
-    pub static ALT: AtomicBool = AtomicBool::new(false);
-    pub static CTRL: AtomicBool = AtomicBool::new(false);
-    pub static SHIFT: AtomicBool = AtomicBool::new(false);
-
     loop {
+        // Verifica se o layout mudou e atualiza o teclado se necessário
+        let current_layout = CURRENT_LAYOUT.load(Ordering::Relaxed);
+        if current_layout != last_layout {
+            keyboard = create_keyboard(current_layout);
+            last_layout = current_layout;
+            serial_println!("[KEYBOARD] Layout atualizado para: {}", get_current_layout());
+        }
+
         for _ in 0..10000 {
             // Poll for scancodes
             if let Some(scancode) = scancode_queue.pop() {
                 if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
-                    let ord = Ordering::Relaxed;
+                    // Atualiza estados das teclas modificadoras
                     match key_event.code {
                         KeyCode::LControl | KeyCode::RControl => {
-                            CTRL.store(key_event.state == KeyState::Down, ord);
+                            CTRL.store(key_event.state == KeyState::Down, Ordering::Relaxed);
                         }
                         KeyCode::LShift | KeyCode::RShift => {
-                            SHIFT.store(key_event.state == KeyState::Down,ord);
+                            SHIFT.store(key_event.state == KeyState::Down, Ordering::Relaxed);
                         }
                         KeyCode::LAlt => {
-                            ALT.store(key_event.state == KeyState::Down,ord);
+                            ALT.store(key_event.state == KeyState::Down, Ordering::Relaxed);
                         }
                         _ => {}
                     }
-                    let is_alt = ALT.load(ord);
-                    let is_ctrl = CTRL.load(ord);
-                    let is_shift = SHIFT.load(ord);
+                    
                     if let Some(key) = keyboard.process_keyevent(key_event) {
+                        let ctrl = CTRL.load(Ordering::Relaxed);
+                        let shift = SHIFT.load(Ordering::Relaxed);
+                        let alt = ALT.load(Ordering::Relaxed);
+                        
                         match key {
                             DecodedKey::Unicode(character) => {
                                 window_manager.handle_char_input(
                                     character,
-                                    is_alt,
-                                    is_ctrl,
-                                    is_shift,
+                                    ctrl,
+                                    alt,
+                                    shift,
                                 );
                             }
                             DecodedKey::RawKey(key) => {
                                 window_manager.handle_key_input(key);
+                                
+                                // Atalho para alternar layout: Ctrl+Alt+K
+                                if ctrl && alt && key == KeyCode::K {
+                                    if cycle_keyboard_layout() {
+                                        serial_println!("[KEYBOARD] Layout alterado para: {}", get_current_layout());
+                                    }
+                                }
                             }
                         }
                     }
@@ -492,7 +510,7 @@ pub fn run_desktop() -> ! {
             // Add new taskbar window shapes
             const TASKBAR_WINDOW_WIDTH: usize = 120;
             const TASKBAR_WINDOW_HEIGHT: usize = 30;
-            let taskbar_start_x = 170; // After start button
+            let taskbar_start_x = 170;
 
             for (i, (window_id, title, is_focused)) in current_windows.iter().enumerate() {
                 let x = taskbar_start_x + i * (TASKBAR_WINDOW_WIDTH + 5);
@@ -504,9 +522,9 @@ pub fn run_desktop() -> ! {
                 }
 
                 let bg_color = if *is_focused {
-                    Color::new(220, 220, 220) // Light gray for focused
+                    Color::new(220, 220, 220)
                 } else {
-                    Color::new(160, 160, 160) // Dark gray for unfocused
+                    Color::new(160, 160, 160)
                 };
 
                 let bg_idx = desktop.add_shape(Shape::Rectangle {
@@ -574,7 +592,6 @@ pub fn run_desktop() -> ! {
             // Check for clicks on taskbar window icons
             if !handled {
                 for (_bg_idx, _text_idx, _icon_idx, window_id) in &taskbar_window_shapes {
-                    // Get the shape bounds (we need to calculate them since we stored the indices)
                     let taskbar_start_x = 170;
                     let window_index = taskbar_window_shapes
                         .iter()
@@ -724,7 +741,6 @@ pub fn run_desktop() -> ! {
                     let mut fb_lock = fb.lock();
                     let dirty_regions = window_manager.handle_mouse_release(&mut fb_lock);
 
-                    // Mark all dirty regions from window drag completion
                     for (x, y, width, height) in dirty_regions {
                         desktop.force_dirty_region(x, y, width, height);
                     }
@@ -737,7 +753,6 @@ pub fn run_desktop() -> ! {
                 if let Some(fb) = framebuffer::FRAMEBUFFER.get() {
                     let mut fb_lock = fb.lock();
                     window_manager.handle_mouse_move(mouse_state.x, mouse_state.y, &mut fb_lock);
-                    // Note: No dirty regions needed during drag since we're using direct framebuffer manipulation
                 }
             });
         }
@@ -747,21 +762,14 @@ pub fn run_desktop() -> ! {
             if let Some(fb) = framebuffer::FRAMEBUFFER.get() {
                 let mut fb_lock = fb.lock();
 
-                // Get dirty regions BEFORE rendering (since render() clears them)
                 let dirty_regions: Vec<Rect> = desktop.get_dirty_regions().to_vec();
 
-                // Render desktop
                 let desktop_rendered = desktop.render(&mut fb_lock, 0, 0, false);
-
-                // Only render windows if they intersect with dirty regions
                 let windows_rendered = window_manager.render(&mut fb_lock, &dirty_regions);
 
-                // Handle mouse cursor rendering with region optimization
                 let should_redraw_cursor = if mouse_state.has_moved {
-                    // Mouse moved, always redraw
                     true
                 } else if desktop_rendered || windows_rendered {
-                    // Check if any dirty regions intersect with current or previous cursor position
                     let current_cursor_bounds = FrameBufferWriter::get_cursor_bounds(
                         mouse_state.x as usize,
                         mouse_state.y as usize,
@@ -773,7 +781,6 @@ pub fn run_desktop() -> ! {
                         current_cursor_bounds.3,
                     );
 
-                    // Check if dirty regions intersect with current cursor
                     let cursor_intersects = dirty_regions
                         .iter()
                         .any(|region| region.intersects(&current_cursor_rect));
@@ -783,7 +790,6 @@ pub fn run_desktop() -> ! {
                             .save_cursor_background(mouse_state.x as usize, mouse_state.y as usize);
                     }
 
-                    // Also check previous cursor position if it exists
                     let prev_cursor_intersects =
                         if let Some((prev_x, prev_y)) = fb_lock.get_previous_cursor_pos() {
                             let prev_cursor_bounds =

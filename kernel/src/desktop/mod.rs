@@ -8,3 +8,4 @@ pub mod sysinfo;
 pub mod tictactoe;
 pub mod window_manager;
 pub mod terminal;
+pub mod keyboard;
